@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "latent-agent-prototype"
+version = "0.1.0"
+description = "Latent-state versus text coordination for code-executing data-analysis agents"
+requires-python = ">=3.10"
+dependencies = [
+  "accelerate>=0.33",
+  "datasets>=2.20",
+  "matplotlib>=3.8",
+  "numpy>=1.26",
+  "pandas>=2.2",
+  "psutil>=5.9",
+  "pynvml>=11.5",
+  "safetensors>=0.4",
+  "scikit-learn>=1.5",
+  "sentencepiece>=0.2",
+  "transformers>=4.52",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+cloud = [
+  "torch==2.6.0",
+  "torchvision==0.21.0",
+  "torchaudio==2.6.0",
+  "transformers==4.53.3",
+  "accelerate==1.8.1",
+  "bitsandbytes==0.46.1",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
