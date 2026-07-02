@@ -52,6 +52,14 @@ def test_horizon_budget_scaling_enforces_reference_fit():
     with pytest.raises(ValueError):
         run_phase3.resolve_code_budget(600, "short")
 
+    budget, ratio = run_phase3.resolve_code_budget(1100, "xlong")
+    assert budget == 1664
+    assert ratio < 0.70
+
+    budget, ratio = run_phase3.resolve_code_budget(1300, "xxlong")
+    assert budget == 1920
+    assert ratio < 0.70
+
 
 def test_phase3_reference_scripts_pass_scorers(tmp_path):
     for task in TASKS.values():
@@ -106,6 +114,49 @@ def test_phase3_prompts_include_schema_and_preserve_join_keys():
         "ROI = (revenue - spend) / spend",
     ):
         assert snippet in campaign
+
+
+def test_extra_horizon_tasks_have_stage_counts_and_output_contracts():
+    expected = {
+        "orders_kpi_xlong": (
+            9,
+            "orders_xlong_report.json",
+            ("best_tier_by_margin", "margin_per_unit"),
+        ),
+        "orders_kpi_xxlong": (
+            11,
+            "orders_xxlong_report.json",
+            ("top_customer_id_by_net_revenue", "predicted_net_revenue_for_units_6_price_9_discount_0"),
+        ),
+        "sensor_quality_xlong": (
+            9,
+            "sensor_xlong_report.json",
+            ("sensor_xlong_site_summary.csv", "best_site_by_temp_stability", "mean_alert_rate"),
+        ),
+        "sensor_quality_xxlong": (
+            11,
+            "sensor_xxlong_report.json",
+            ("sensor_xxlong_site_summary.csv", "worst_sensor_by_alerts", "peak_site_hour"),
+        ),
+        "campaign_roi_xlong": (
+            9,
+            "campaign_xlong_report.json",
+            ("best_owner_by_profit", "overall_ctr"),
+        ),
+        "campaign_roi_xxlong": (
+            11,
+            "campaign_xxlong_report.json",
+            ("top_channel_by_mean_roi", "predicted_profit_for_spend_250"),
+        ),
+    }
+    for task_id, (stages, output, snippets) in expected.items():
+        task = TASKS[task_id]
+        assert task.horizon_stages == stages
+        assert len(task.stage_specs) == stages
+        assert output in task.prompt
+        assert output in task.prompt
+        for snippet in snippets:
+            assert snippet in task.prompt
 
 
 def test_orders_short_fixture_uses_numeric_customer_ids(tmp_path):

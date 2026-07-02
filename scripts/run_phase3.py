@@ -46,9 +46,9 @@ from latent_agent.tasks import ScoreResult, ToyTask  # noqa: E402
 from latent_agent.token_split import COORDINATION, FIXED_PROMPT, TOOL_IO, PromptPart, TokenLedger, count_tokens, extract_python_code, render_prompt  # noqa: E402
 
 
-BASE_BUDGETS = {"short": 512, "medium": 768, "long": 1152}
-BUDGET_CAPS = {"short": 768, "medium": 1024, "long": 1536}
-HORIZON_LABELS = ["short", "medium", "long"]
+BASE_BUDGETS = {"short": 512, "medium": 768, "long": 1152, "xlong": 1408, "xxlong": 1664}
+BUDGET_CAPS = {"short": 768, "medium": 1024, "long": 1536, "xlong": 1792, "xxlong": 2048}
+HORIZON_LABELS = ["short", "medium", "long", "xlong", "xxlong"]
 MODE_RECORD_NAMES = {"A": "A_single", "B": "B_textmas", "C": "C_latentmas"}
 
 

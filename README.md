@@ -72,8 +72,9 @@ indistinguishable from the text baseline's 12/15 while still using zero decoded
 coordination tokens.
 
 The current evidence is therefore: cache construction matters strongly; latent
-steps are directionally helpful but not yet statistically confirmed; decoded
-anchors did not help and appear to re-pollute the cache. See
+steps remain directionally helpful but were not statistically confirmed after
+pooling to n=30; decoded anchors did not help and appear to re-pollute the
+cache. See
 [`reports/phase4a_findings.md`](reports/phase4a_findings.md) for the Phase 4A
 tables, confidence intervals, and Fisher exact tests.
 

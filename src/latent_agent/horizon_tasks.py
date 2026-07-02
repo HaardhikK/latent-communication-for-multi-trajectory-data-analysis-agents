@@ -9,7 +9,7 @@ import pandas as pd
 from .tasks import ScoreResult, ToyTask
 
 
-HORIZON_ORDER = {"short": 3, "medium": 5, "long": 7}
+HORIZON_ORDER = {"short": 3, "medium": 5, "long": 7, "xlong": 9, "xxlong": 11}
 
 
 def _write_csv(path: Path, rows: list[dict[str, object]]) -> None:
@@ -184,6 +184,65 @@ def _orders_long_score(work_dir: Path) -> ScoreResult:
     return _score(checks, "orders long checks completed", data)
 
 
+def _orders_xlong_score(work_dir: Path) -> ScoreResult:
+    from sklearn.linear_model import LinearRegression
+
+    data, message = _load_json(work_dir / "orders_xlong_report.json")
+    if data is None:
+        return ScoreResult(False, 0.0, message, {})
+    clean = _orders_cleaned(work_dir)
+    customer = clean.groupby("customer_id")["net_revenue"].sum()
+    top_region = clean.groupby("region")["net_revenue"].sum().idxmax()
+    model = LinearRegression().fit(clean[["units", "unit_price", "discount_rate"]], clean["net_revenue"])
+    expected_mae = float(abs(model.predict(clean[["units", "unit_price", "discount_rate"]]) - clean["net_revenue"]).mean())
+    best_tier = clean.groupby("tier")["margin"].sum().idxmax()
+    checks = {
+        "rows_clean": data.get("rows_clean") == len(clean),
+        "total_net_revenue": _close(data.get("total_net_revenue"), clean["net_revenue"].sum()),
+        "total_margin": _close(data.get("total_margin"), clean["margin"].sum()),
+        "top_region": str(data.get("top_region", "")).lower() == str(top_region).lower(),
+        "high_value_customers": int(data.get("high_value_customers", -1)) == int((customer >= 30).sum()),
+        "model_mae": _close(data.get("model_mae"), expected_mae, atol=1e-3),
+        "best_tier_by_margin": str(data.get("best_tier_by_margin", "")).lower() == str(best_tier).lower(),
+        "margin_per_unit": _close(data.get("margin_per_unit"), clean["margin"].sum() / clean["units"].sum()),
+    }
+    return _score(checks, "orders xlong checks completed", data)
+
+
+def _orders_xxlong_score(work_dir: Path) -> ScoreResult:
+    from sklearn.linear_model import LinearRegression
+
+    data, message = _load_json(work_dir / "orders_xxlong_report.json")
+    if data is None:
+        return ScoreResult(False, 0.0, message, {})
+    clean = _orders_cleaned(work_dir)
+    customer = clean.groupby("customer_id")["net_revenue"].sum()
+    top_region = clean.groupby("region")["net_revenue"].sum().idxmax()
+    best_tier = clean.groupby("tier")["margin"].sum().idxmax()
+    top_customer = customer.idxmax()
+    model = LinearRegression().fit(clean[["units", "unit_price", "discount_rate"]], clean["net_revenue"])
+    train_pred = model.predict(clean[["units", "unit_price", "discount_rate"]])
+    expected_mae = float(abs(train_pred - clean["net_revenue"]).mean())
+    expected_prediction = float(model.predict(pd.DataFrame([{"units": 6, "unit_price": 9, "discount_rate": 0.0}]))[0])
+    checks = {
+        "rows_clean": data.get("rows_clean") == len(clean),
+        "total_net_revenue": _close(data.get("total_net_revenue"), clean["net_revenue"].sum()),
+        "total_margin": _close(data.get("total_margin"), clean["margin"].sum()),
+        "top_region": str(data.get("top_region", "")).lower() == str(top_region).lower(),
+        "high_value_customers": int(data.get("high_value_customers", -1)) == int((customer >= 30).sum()),
+        "model_mae": _close(data.get("model_mae"), expected_mae, atol=1e-3),
+        "best_tier_by_margin": str(data.get("best_tier_by_margin", "")).lower() == str(best_tier).lower(),
+        "margin_per_unit": _close(data.get("margin_per_unit"), clean["margin"].sum() / clean["units"].sum()),
+        "top_customer_id_by_net_revenue": _same_id(data.get("top_customer_id_by_net_revenue"), top_customer),
+        "predicted_net_revenue_for_units_6_price_9_discount_0": _close(
+            data.get("predicted_net_revenue_for_units_6_price_9_discount_0"),
+            expected_prediction,
+            atol=1e-2,
+        ),
+    }
+    return _score(checks, "orders xxlong checks completed", data)
+
+
 ORDERS_SHORT_REFERENCE = """import json
 import pandas as pd
 orders=pd.read_csv('orders.csv')
@@ -238,6 +297,53 @@ pred=model.predict(X)
 mae=float(abs(pred-y).mean())
 out=pd.DataFrame([{'rows_clean':int(len(df)),'total_net_revenue':float(df['net_revenue'].sum()),'total_margin':float(df['margin'].sum()),'top_region':str(top_region),'high_value_customers':int((customer>=30).sum()),'model_mae':mae}])
 out.to_csv('orders_long_report.csv',index=False)
+"""
+
+
+ORDERS_XLONG_REFERENCE = """import json
+import pandas as pd
+from sklearn.linear_model import LinearRegression
+orders=pd.read_csv('orders.csv')
+customers=pd.read_csv('customers.csv')
+for c in ['units','unit_price','unit_cost','discount_rate']:
+    orders[c]=pd.to_numeric(orders[c],errors='coerce')
+orders=orders[(orders['status']=='complete') & orders['units'].notna()].copy()
+orders['gross_revenue']=orders['units']*orders['unit_price']
+orders['net_revenue']=orders['gross_revenue']*(1-orders['discount_rate'])
+orders['margin']=orders['net_revenue']-orders['units']*orders['unit_cost']
+df=orders.merge(customers,on='customer_id',how='left')
+customer=df.groupby('customer_id')['net_revenue'].sum()
+top_region=df.groupby('region')['net_revenue'].sum().idxmax()
+model=LinearRegression().fit(df[['units','unit_price','discount_rate']],df['net_revenue'])
+mae=float(abs(model.predict(df[['units','unit_price','discount_rate']])-df['net_revenue']).mean())
+best_tier=df.groupby('tier')['margin'].sum().idxmax()
+out={'rows_clean':int(len(df)),'total_net_revenue':float(df['net_revenue'].sum()),'total_margin':float(df['margin'].sum()),'top_region':str(top_region),'high_value_customers':int((customer>=30).sum()),'model_mae':mae,'best_tier_by_margin':str(best_tier),'margin_per_unit':float(df['margin'].sum()/df['units'].sum())}
+with open('orders_xlong_report.json','w',encoding='utf-8') as f:
+    json.dump(out,f)
+"""
+
+
+ORDERS_XXLONG_REFERENCE = """import json
+import pandas as pd
+from sklearn.linear_model import LinearRegression
+orders=pd.read_csv('orders.csv')
+customers=pd.read_csv('customers.csv')
+for c in ['units','unit_price','unit_cost','discount_rate']:
+    orders[c]=pd.to_numeric(orders[c],errors='coerce')
+orders=orders[(orders['status']=='complete') & orders['units'].notna()].copy()
+orders['gross_revenue']=orders['units']*orders['unit_price']
+orders['net_revenue']=orders['gross_revenue']*(1-orders['discount_rate'])
+orders['margin']=orders['net_revenue']-orders['units']*orders['unit_cost']
+df=orders.merge(customers,on='customer_id',how='left')
+customer=df.groupby('customer_id')['net_revenue'].sum()
+top_region=df.groupby('region')['net_revenue'].sum().idxmax()
+model=LinearRegression().fit(df[['units','unit_price','discount_rate']],df['net_revenue'])
+mae=float(abs(model.predict(df[['units','unit_price','discount_rate']])-df['net_revenue']).mean())
+best_tier=df.groupby('tier')['margin'].sum().idxmax()
+future=pd.DataFrame([{'units':6,'unit_price':9,'discount_rate':0.0}])
+out={'rows_clean':int(len(df)),'total_net_revenue':float(df['net_revenue'].sum()),'total_margin':float(df['margin'].sum()),'top_region':str(top_region),'high_value_customers':int((customer>=30).sum()),'model_mae':mae,'best_tier_by_margin':str(best_tier),'margin_per_unit':float(df['margin'].sum()/df['units'].sum()),'top_customer_id_by_net_revenue':int(customer.idxmax()),'predicted_net_revenue_for_units_6_price_9_discount_0':float(model.predict(future)[0])}
+with open('orders_xxlong_report.json','w',encoding='utf-8') as f:
+    json.dump(out,f)
 """
 
 
@@ -363,6 +469,78 @@ def _sensor_long_score(work_dir: Path) -> ScoreResult:
     return _score(checks, "sensor long checks completed", {"report": report, "hourly": hourly.to_dict("records")})
 
 
+def _sensor_xlong_score(work_dir: Path) -> ScoreResult:
+    report, message = _load_json(work_dir / "sensor_xlong_report.json")
+    if report is None:
+        return ScoreResult(False, 0.0, message, {})
+    site_path = work_dir / "sensor_xlong_site_summary.csv"
+    if not site_path.exists():
+        return ScoreResult(False, 0.0, "sensor_xlong_site_summary.csv was not created", {})
+    site_summary = pd.read_csv(site_path)
+    df = _sensor_cleaned(work_dir)
+    worst_site = df.groupby("site")["alert"].sum().idxmax()
+    peak_hour = int(df.groupby("hour")["alert"].sum().idxmax())
+    expected_site = (
+        df.groupby("site")
+        .agg(temp_std=("adjusted_temp", "std"), alert_rate=("alert", "mean"), reading_count=("sensor_id", "size"))
+        .reset_index()
+        .sort_values("site")
+        .reset_index(drop=True)
+    )
+    got_site = site_summary.sort_values("site").reset_index(drop=True)
+    best_site = expected_site.sort_values(["temp_std", "site"]).iloc[0]["site"]
+    checks = {
+        "rows_clean": report.get("rows_clean") == len(df),
+        "total_alerts": int(report.get("total_alerts", -1)) == int(df["alert"].sum()),
+        "worst_site": str(report.get("worst_site", "")).lower() == str(worst_site).lower(),
+        "peak_hour": int(report.get("peak_hour", -1)) == peak_hour,
+        "best_site_by_temp_stability": str(report.get("best_site_by_temp_stability", "")).lower() == str(best_site).lower(),
+        "mean_alert_rate": _close(report.get("mean_alert_rate"), df["alert"].mean()),
+        "site_summary_columns": {"site", "temp_std", "alert_rate", "reading_count"}.issubset(got_site.columns),
+        "site_summary_rows": len(got_site) == len(expected_site),
+        "site_summary_alert_rate": "alert_rate" in got_site and _allclose_values(got_site["alert_rate"], expected_site["alert_rate"]),
+    }
+    return _score(checks, "sensor xlong checks completed", {"report": report, "site_summary": site_summary.to_dict("records")})
+
+
+def _sensor_xxlong_score(work_dir: Path) -> ScoreResult:
+    report, message = _load_json(work_dir / "sensor_xxlong_report.json")
+    if report is None:
+        return ScoreResult(False, 0.0, message, {})
+    site_path = work_dir / "sensor_xxlong_site_summary.csv"
+    if not site_path.exists():
+        return ScoreResult(False, 0.0, "sensor_xxlong_site_summary.csv was not created", {})
+    site_summary = pd.read_csv(site_path)
+    df = _sensor_cleaned(work_dir)
+    worst_site = df.groupby("site")["alert"].sum().idxmax()
+    peak_hour = int(df.groupby("hour")["alert"].sum().idxmax())
+    expected_site = (
+        df.groupby("site")
+        .agg(temp_std=("adjusted_temp", "std"), alert_rate=("alert", "mean"), reading_count=("sensor_id", "size"))
+        .reset_index()
+        .sort_values("site")
+        .reset_index(drop=True)
+    )
+    got_site = site_summary.sort_values("site").reset_index(drop=True)
+    best_site = expected_site.sort_values(["temp_std", "site"]).iloc[0]["site"]
+    worst_sensor = df.groupby("sensor_id")["alert"].sum().idxmax()
+    site_hour = df.groupby(["site", "hour"])["alert"].sum().reset_index().sort_values(["alert", "site", "hour"], ascending=[False, True, True]).iloc[0]
+    peak_site_hour = f"{site_hour['site']}-{int(site_hour['hour'])}"
+    checks = {
+        "rows_clean": report.get("rows_clean") == len(df),
+        "total_alerts": int(report.get("total_alerts", -1)) == int(df["alert"].sum()),
+        "worst_site": str(report.get("worst_site", "")).lower() == str(worst_site).lower(),
+        "peak_hour": int(report.get("peak_hour", -1)) == peak_hour,
+        "best_site_by_temp_stability": str(report.get("best_site_by_temp_stability", "")).lower() == str(best_site).lower(),
+        "mean_alert_rate": _close(report.get("mean_alert_rate"), df["alert"].mean()),
+        "site_summary_columns": {"site", "temp_std", "alert_rate", "reading_count"}.issubset(got_site.columns),
+        "site_summary_rows": len(got_site) == len(expected_site),
+        "worst_sensor_by_alerts": str(report.get("worst_sensor_by_alerts", "")).lower() == str(worst_sensor).lower(),
+        "peak_site_hour": str(report.get("peak_site_hour", "")).lower() == peak_site_hour.lower(),
+    }
+    return _score(checks, "sensor xxlong checks completed", {"report": report, "site_summary": site_summary.to_dict("records")})
+
+
 SENSOR_SHORT_REFERENCE = """import json
 import pandas as pd
 r=pd.read_csv('readings.csv')
@@ -412,6 +590,53 @@ hourly=df.groupby(['site','hour']).agg(alert_count=('alert','sum'),mean_adjusted
 hourly.to_csv('sensor_long_hourly_summary.csv',index=False)
 out={'rows_clean':int(len(df)),'total_alerts':int(df['alert'].sum()),'worst_site':str(df.groupby('site')['alert'].sum().idxmax()),'peak_hour':int(df.groupby('hour')['alert'].sum().idxmax())}
 with open('sensor_long_report.json','w',encoding='utf-8') as f:
+    json.dump(out,f)
+"""
+
+
+SENSOR_XLONG_REFERENCE = """import json
+import pandas as pd
+r=pd.read_csv('readings.csv')
+m=pd.read_csv('sensor_meta.csv')
+r['raw_temp']=pd.to_numeric(r['raw_temp'],errors='coerce')
+r['raw_pressure']=pd.to_numeric(r['raw_pressure'],errors='coerce')
+r=r[(r['status']=='ok') & r['raw_temp'].notna()].copy()
+df=r.merge(m,on='sensor_id',how='left')
+df['timestamp']=pd.to_datetime(df['timestamp'])
+df['hour']=df['timestamp'].dt.hour
+df['adjusted_temp']=df['raw_temp']+df['temp_offset']
+df['adjusted_pressure']=df['raw_pressure']*df['pressure_scale']
+df['alert']=(df['adjusted_temp']>76) | (df['adjusted_pressure']>105)
+hourly=df.groupby(['site','hour']).agg(alert_count=('alert','sum'),mean_adjusted_temp=('adjusted_temp','mean')).reset_index()
+site_summary=df.groupby('site').agg(temp_std=('adjusted_temp','std'),alert_rate=('alert','mean'),reading_count=('sensor_id','size')).reset_index().sort_values('site')
+site_summary.to_csv('sensor_xlong_site_summary.csv',index=False)
+best_site=site_summary.sort_values(['temp_std','site']).iloc[0]['site']
+out={'rows_clean':int(len(df)),'total_alerts':int(df['alert'].sum()),'worst_site':str(df.groupby('site')['alert'].sum().idxmax()),'peak_hour':int(df.groupby('hour')['alert'].sum().idxmax()),'best_site_by_temp_stability':str(best_site),'mean_alert_rate':float(df['alert'].mean())}
+with open('sensor_xlong_report.json','w',encoding='utf-8') as f:
+    json.dump(out,f)
+"""
+
+
+SENSOR_XXLONG_REFERENCE = """import json
+import pandas as pd
+r=pd.read_csv('readings.csv')
+m=pd.read_csv('sensor_meta.csv')
+r['raw_temp']=pd.to_numeric(r['raw_temp'],errors='coerce')
+r['raw_pressure']=pd.to_numeric(r['raw_pressure'],errors='coerce')
+r=r[(r['status']=='ok') & r['raw_temp'].notna()].copy()
+df=r.merge(m,on='sensor_id',how='left')
+df['timestamp']=pd.to_datetime(df['timestamp'])
+df['hour']=df['timestamp'].dt.hour
+df['adjusted_temp']=df['raw_temp']+df['temp_offset']
+df['adjusted_pressure']=df['raw_pressure']*df['pressure_scale']
+df['alert']=(df['adjusted_temp']>76) | (df['adjusted_pressure']>105)
+hourly=df.groupby(['site','hour']).agg(alert_count=('alert','sum'),mean_adjusted_temp=('adjusted_temp','mean')).reset_index()
+site_summary=df.groupby('site').agg(temp_std=('adjusted_temp','std'),alert_rate=('alert','mean'),reading_count=('sensor_id','size')).reset_index().sort_values('site')
+site_summary.to_csv('sensor_xxlong_site_summary.csv',index=False)
+best_site=site_summary.sort_values(['temp_std','site']).iloc[0]['site']
+site_hour=df.groupby(['site','hour'])['alert'].sum().reset_index().sort_values(['alert','site','hour'],ascending=[False,True,True]).iloc[0]
+out={'rows_clean':int(len(df)),'total_alerts':int(df['alert'].sum()),'worst_site':str(df.groupby('site')['alert'].sum().idxmax()),'peak_hour':int(df.groupby('hour')['alert'].sum().idxmax()),'best_site_by_temp_stability':str(best_site),'mean_alert_rate':float(df['alert'].mean()),'worst_sensor_by_alerts':str(df.groupby('sensor_id')['alert'].sum().idxmax()),'peak_site_hour':f"{site_hour['site']}-{int(site_hour['hour'])}"}
+with open('sensor_xxlong_report.json','w',encoding='utf-8') as f:
     json.dump(out,f)
 """
 
@@ -526,6 +751,50 @@ def _campaign_long_score(work_dir: Path) -> ScoreResult:
     return _score(checks, "campaign long checks completed", data)
 
 
+def _campaign_xlong_score(work_dir: Path) -> ScoreResult:
+    data, message = _load_json(work_dir / "campaign_xlong_report.json")
+    if data is None:
+        return ScoreResult(False, 0.0, message, {})
+    df = _campaign_cleaned(work_dir)
+    top_channel = df.groupby("channel")["revenue"].sum().idxmax()
+    expected_pred = float(np.poly1d(np.polyfit(df["spend"], df["revenue"], 1))(250))
+    best_owner = (df["revenue"] - df["spend"]).groupby(df["owner"]).sum().idxmax()
+    checks = {
+        "rows_clean": data.get("rows_clean") == len(df),
+        "total_profit": _close(data.get("total_profit"), (df["revenue"] - df["spend"]).sum()),
+        "top_channel_by_revenue": str(data.get("top_channel_by_revenue", "")).lower() == str(top_channel).lower(),
+        "best_roi_campaign": _same_id(data.get("best_roi_campaign"), df.sort_values("roi", ascending=False).iloc[0]["campaign_id"]),
+        "predicted_revenue_for_spend_250": _close(data.get("predicted_revenue_for_spend_250"), expected_pred, atol=1e-2),
+        "best_owner_by_profit": str(data.get("best_owner_by_profit", "")).lower() == str(best_owner).lower(),
+        "overall_ctr": _close(data.get("overall_ctr"), df["clicks"].sum() / df["impressions"].sum()),
+    }
+    return _score(checks, "campaign xlong checks completed", data)
+
+
+def _campaign_xxlong_score(work_dir: Path) -> ScoreResult:
+    data, message = _load_json(work_dir / "campaign_xxlong_report.json")
+    if data is None:
+        return ScoreResult(False, 0.0, message, {})
+    df = _campaign_cleaned(work_dir)
+    top_channel = df.groupby("channel")["revenue"].sum().idxmax()
+    model = np.poly1d(np.polyfit(df["spend"], df["revenue"], 1))
+    expected_pred = float(model(250))
+    best_owner = (df["revenue"] - df["spend"]).groupby(df["owner"]).sum().idxmax()
+    top_channel_roi = df.groupby("channel")["roi"].mean().idxmax()
+    checks = {
+        "rows_clean": data.get("rows_clean") == len(df),
+        "total_profit": _close(data.get("total_profit"), (df["revenue"] - df["spend"]).sum()),
+        "top_channel_by_revenue": str(data.get("top_channel_by_revenue", "")).lower() == str(top_channel).lower(),
+        "best_roi_campaign": _same_id(data.get("best_roi_campaign"), df.sort_values("roi", ascending=False).iloc[0]["campaign_id"]),
+        "predicted_revenue_for_spend_250": _close(data.get("predicted_revenue_for_spend_250"), expected_pred, atol=1e-2),
+        "best_owner_by_profit": str(data.get("best_owner_by_profit", "")).lower() == str(best_owner).lower(),
+        "overall_ctr": _close(data.get("overall_ctr"), df["clicks"].sum() / df["impressions"].sum()),
+        "top_channel_by_mean_roi": str(data.get("top_channel_by_mean_roi", "")).lower() == str(top_channel_roi).lower(),
+        "predicted_profit_for_spend_250": _close(data.get("predicted_profit_for_spend_250"), expected_pred - 250, atol=1e-2),
+    }
+    return _score(checks, "campaign xxlong checks completed", data)
+
+
 CAMPAIGN_SHORT_REFERENCE = """import json
 import pandas as pd
 c=pd.read_csv('campaigns.csv')
@@ -572,6 +841,54 @@ coef=np.polyfit(df['spend'],df['revenue'],1)
 pred=float(np.poly1d(coef)(250))
 out={'rows_clean':int(len(df)),'total_profit':float((df['revenue']-df['spend']).sum()),'top_channel_by_revenue':str(top_channel),'best_roi_campaign':str(best_roi),'predicted_revenue_for_spend_250':pred}
 with open('campaign_long_report.json','w',encoding='utf-8') as f:
+    json.dump(out,f)
+"""
+
+
+CAMPAIGN_XLONG_REFERENCE = """import json
+import numpy as np
+import pandas as pd
+c=pd.read_csv('campaigns.csv')
+ch=pd.read_csv('channels.csv')
+for col in ['impressions','clicks','conversions','spend','revenue']:
+    c[col]=pd.to_numeric(c[col],errors='coerce')
+c=c.dropna(subset=['clicks','spend','revenue']).copy()
+df=c.merge(ch,on='channel_id',how='left')
+df['ctr']=df['clicks']/df['impressions']
+df['cvr']=df['conversions']/df['clicks']
+df['roi']=(df['revenue']-df['spend'])/df['spend']
+df['profit']=df['revenue']-df['spend']
+top_channel=df.groupby('channel')['revenue'].sum().idxmax()
+best_roi=df.sort_values('roi',ascending=False).iloc[0]['campaign_id']
+pred=float(np.poly1d(np.polyfit(df['spend'],df['revenue'],1))(250))
+best_owner=df.groupby('owner')['profit'].sum().idxmax()
+out={'rows_clean':int(len(df)),'total_profit':float(df['profit'].sum()),'top_channel_by_revenue':str(top_channel),'best_roi_campaign':str(best_roi),'predicted_revenue_for_spend_250':pred,'best_owner_by_profit':str(best_owner),'overall_ctr':float(df['clicks'].sum()/df['impressions'].sum())}
+with open('campaign_xlong_report.json','w',encoding='utf-8') as f:
+    json.dump(out,f)
+"""
+
+
+CAMPAIGN_XXLONG_REFERENCE = """import json
+import numpy as np
+import pandas as pd
+c=pd.read_csv('campaigns.csv')
+ch=pd.read_csv('channels.csv')
+for col in ['impressions','clicks','conversions','spend','revenue']:
+    c[col]=pd.to_numeric(c[col],errors='coerce')
+c=c.dropna(subset=['clicks','spend','revenue']).copy()
+df=c.merge(ch,on='channel_id',how='left')
+df['ctr']=df['clicks']/df['impressions']
+df['cvr']=df['conversions']/df['clicks']
+df['roi']=(df['revenue']-df['spend'])/df['spend']
+df['profit']=df['revenue']-df['spend']
+top_channel=df.groupby('channel')['revenue'].sum().idxmax()
+best_roi=df.sort_values('roi',ascending=False).iloc[0]['campaign_id']
+model=np.poly1d(np.polyfit(df['spend'],df['revenue'],1))
+pred=float(model(250))
+best_owner=df.groupby('owner')['profit'].sum().idxmax()
+top_roi_channel=df.groupby('channel')['roi'].mean().idxmax()
+out={'rows_clean':int(len(df)),'total_profit':float(df['profit'].sum()),'top_channel_by_revenue':str(top_channel),'best_roi_campaign':str(best_roi),'predicted_revenue_for_spend_250':pred,'best_owner_by_profit':str(best_owner),'overall_ctr':float(df['clicks'].sum()/df['impressions'].sum()),'top_channel_by_mean_roi':str(top_roi_channel),'predicted_profit_for_spend_250':float(pred-250)}
+with open('campaign_xxlong_report.json','w',encoding='utf-8') as f:
     json.dump(out,f)
 """
 
@@ -664,6 +981,30 @@ ORDERS_STAGES = {
         "Fit LinearRegression predicting net_revenue from units, unit_price, discount_rate and compute training MAE.",
         "Write one-row orders_long_report.csv with columns rows_clean, total_net_revenue, total_margin, top_region, high_value_customers, model_mae.",
     ),
+    "xlong": (
+        "Read orders.csv and customers.csv.",
+        "Coerce numeric order fields, keep complete orders, and drop rows with missing units.",
+        "Compute gross_revenue, net_revenue, and margin using unit_price or the identical price alias.",
+        "Join customer regions and tiers.",
+        "Aggregate customer net revenue and count customers with net revenue at least 30.",
+        "Fit LinearRegression predicting net_revenue from units, unit_price, discount_rate and compute training MAE.",
+        "Aggregate total margin by tier and identify best_tier_by_margin.",
+        "Compute margin_per_unit = total_margin / total units over cleaned rows.",
+        "Write one JSON object orders_xlong_report.json with rows_clean, total_net_revenue, total_margin, top_region, high_value_customers, model_mae, best_tier_by_margin, margin_per_unit.",
+    ),
+    "xxlong": (
+        "Read orders.csv and customers.csv.",
+        "Coerce numeric order fields, keep complete orders, and drop rows with missing units.",
+        "Compute gross_revenue, net_revenue, and margin using unit_price or the identical price alias.",
+        "Join customer regions and tiers.",
+        "Aggregate customer net revenue and count customers with net revenue at least 30.",
+        "Fit LinearRegression predicting net_revenue from units, unit_price, discount_rate and compute training MAE.",
+        "Aggregate total margin by tier and identify best_tier_by_margin.",
+        "Compute margin_per_unit = total_margin / total units over cleaned rows.",
+        "Identify top_customer_id_by_net_revenue from customer net revenue totals.",
+        "Use the fitted model to predict net revenue for units=6, unit_price=9, discount_rate=0.",
+        "Write one JSON object orders_xxlong_report.json with rows_clean, total_net_revenue, total_margin, top_region, high_value_customers, model_mae, best_tier_by_margin, margin_per_unit, top_customer_id_by_net_revenue, predicted_net_revenue_for_units_6_price_9_discount_0.",
+    ),
 }
 
 
@@ -688,6 +1029,30 @@ SENSOR_STAGES = {
         "Compute adjusted_temp, adjusted_pressure, and alert where adjusted_temp > 76 or adjusted_pressure > 105.",
         "Aggregate site-hour alerts and write sensor_long_hourly_summary.csv.",
         "Write sensor_long_report.json with rows_clean, total_alerts, worst_site, peak_hour.",
+    ),
+    "xlong": (
+        "Read readings.csv and sensor_meta.csv.",
+        "Coerce raw_temp/raw_pressure, keep ok readings, and drop rows missing raw_temp.",
+        "Join sensor metadata.",
+        "Parse timestamp and derive hour.",
+        "Compute adjusted_temp = raw_temp + temp_offset and adjusted_pressure = raw_pressure * pressure_scale.",
+        "Compute alert = (adjusted_temp > 76) | (adjusted_pressure > 105).",
+        "Aggregate site-hour alerts as an intermediate check.",
+        "Aggregate by site and write sensor_xlong_site_summary.csv with site, temp_std, alert_rate, reading_count sorted by site.",
+        "Write one JSON object sensor_xlong_report.json with rows_clean, total_alerts, worst_site, peak_hour, best_site_by_temp_stability, mean_alert_rate.",
+    ),
+    "xxlong": (
+        "Read readings.csv and sensor_meta.csv.",
+        "Coerce raw_temp/raw_pressure, keep ok readings, and drop rows missing raw_temp.",
+        "Join sensor metadata.",
+        "Parse timestamp and derive hour.",
+        "Compute adjusted_temp = raw_temp + temp_offset and adjusted_pressure = raw_pressure * pressure_scale.",
+        "Compute alert = (adjusted_temp > 76) | (adjusted_pressure > 105).",
+        "Aggregate site-hour alerts as an intermediate check.",
+        "Aggregate by site and write sensor_xxlong_site_summary.csv with site, temp_std, alert_rate, reading_count sorted by site.",
+        "Identify best_site_by_temp_stability as the site with the smallest adjusted_temp standard deviation.",
+        "Identify worst_sensor_by_alerts and peak_site_hour formatted as site-hour, for example beta-10.",
+        "Write one JSON object sensor_xxlong_report.json with rows_clean, total_alerts, worst_site, peak_hour, best_site_by_temp_stability, mean_alert_rate, worst_sensor_by_alerts, peak_site_hour.",
     ),
 }
 
@@ -714,6 +1079,30 @@ CAMPAIGN_STAGES = {
         "Fit a simple numpy polynomial line predicting revenue from spend and predict revenue for spend 250.",
         "Write campaign_long_report.json with rows_clean, total_profit, top_channel_by_revenue, best_roi_campaign, predicted_revenue_for_spend_250.",
     ),
+    "xlong": (
+        "Read campaigns.csv and channels.csv.",
+        "Coerce only impressions, clicks, conversions, spend, and revenue with pd.to_numeric; keep campaign_id/channel_id.",
+        "Join channel names and owners on channel_id.",
+        "Compute CTR = clicks / impressions, CVR = conversions / clicks, ROI = (revenue - spend) / spend, and profit = revenue - spend.",
+        "Aggregate channel revenue and identify top_channel_by_revenue.",
+        "Identify best_roi_campaign as the campaign_id with the highest ROI.",
+        "Fit a simple numpy polynomial line predicting revenue from spend and predict revenue for spend 250.",
+        "Aggregate profit by owner and identify best_owner_by_profit.",
+        "Write one JSON object campaign_xlong_report.json with rows_clean, total_profit, top_channel_by_revenue, best_roi_campaign, predicted_revenue_for_spend_250, best_owner_by_profit, overall_ctr.",
+    ),
+    "xxlong": (
+        "Read campaigns.csv and channels.csv.",
+        "Coerce only impressions, clicks, conversions, spend, and revenue with pd.to_numeric; keep campaign_id/channel_id.",
+        "Join channel names and owners on channel_id.",
+        "Compute CTR = clicks / impressions, CVR = conversions / clicks, ROI = (revenue - spend) / spend, and profit = revenue - spend.",
+        "Aggregate channel revenue and identify top_channel_by_revenue.",
+        "Identify best_roi_campaign as the campaign_id with the highest ROI.",
+        "Fit a simple numpy polynomial line predicting revenue from spend and predict revenue for spend 250.",
+        "Aggregate profit by owner and identify best_owner_by_profit.",
+        "Compute overall_ctr = total clicks / total impressions.",
+        "Aggregate mean ROI by channel and identify top_channel_by_mean_roi.",
+        "Write one JSON object campaign_xxlong_report.json with rows_clean, total_profit, top_channel_by_revenue, best_roi_campaign, predicted_revenue_for_spend_250, best_owner_by_profit, overall_ctr, top_channel_by_mean_roi, predicted_profit_for_spend_250.",
+    ),
 }
 
 
@@ -721,12 +1110,18 @@ TASKS: dict[str, ToyTask] = {
     "orders_kpi_short": _task("orders_kpi_short", "orders_kpi", "short", "Orders KPI short horizon", "orders_short_report.json", ORDERS_STAGES["short"], _orders_setup, _orders_short_score, ORDERS_SHORT_REFERENCE),
     "orders_kpi_medium": _task("orders_kpi_medium", "orders_kpi", "medium", "Orders KPI medium horizon", "orders_medium_region_summary.csv", ORDERS_STAGES["medium"], _orders_setup, _orders_medium_score, ORDERS_MEDIUM_REFERENCE),
     "orders_kpi_long": _task("orders_kpi_long", "orders_kpi", "long", "Orders KPI long horizon", "orders_long_report.csv", ORDERS_STAGES["long"], _orders_setup, _orders_long_score, ORDERS_LONG_REFERENCE),
+    "orders_kpi_xlong": _task("orders_kpi_xlong", "orders_kpi", "xlong", "Orders KPI xlong horizon", "orders_xlong_report.json", ORDERS_STAGES["xlong"], _orders_setup, _orders_xlong_score, ORDERS_XLONG_REFERENCE),
+    "orders_kpi_xxlong": _task("orders_kpi_xxlong", "orders_kpi", "xxlong", "Orders KPI xxlong horizon", "orders_xxlong_report.json", ORDERS_STAGES["xxlong"], _orders_setup, _orders_xxlong_score, ORDERS_XXLONG_REFERENCE),
     "sensor_quality_short": _task("sensor_quality_short", "sensor_quality", "short", "Sensor quality short horizon", "sensor_short_report.json", SENSOR_STAGES["short"], _sensor_setup, _sensor_short_score, SENSOR_SHORT_REFERENCE),
     "sensor_quality_medium": _task("sensor_quality_medium", "sensor_quality", "medium", "Sensor quality medium horizon", "sensor_medium_site_summary.csv", SENSOR_STAGES["medium"], _sensor_setup, _sensor_medium_score, SENSOR_MEDIUM_REFERENCE),
     "sensor_quality_long": _task("sensor_quality_long", "sensor_quality", "long", "Sensor quality long horizon", "sensor_long_report.json", SENSOR_STAGES["long"], _sensor_setup, _sensor_long_score, SENSOR_LONG_REFERENCE),
+    "sensor_quality_xlong": _task("sensor_quality_xlong", "sensor_quality", "xlong", "Sensor quality xlong horizon", "sensor_xlong_report.json", SENSOR_STAGES["xlong"], _sensor_setup, _sensor_xlong_score, SENSOR_XLONG_REFERENCE),
+    "sensor_quality_xxlong": _task("sensor_quality_xxlong", "sensor_quality", "xxlong", "Sensor quality xxlong horizon", "sensor_xxlong_report.json", SENSOR_STAGES["xxlong"], _sensor_setup, _sensor_xxlong_score, SENSOR_XXLONG_REFERENCE),
     "campaign_roi_short": _task("campaign_roi_short", "campaign_roi", "short", "Campaign ROI short horizon", "campaign_short_report.json", CAMPAIGN_STAGES["short"], _campaign_setup, _campaign_short_score, CAMPAIGN_SHORT_REFERENCE),
     "campaign_roi_medium": _task("campaign_roi_medium", "campaign_roi", "medium", "Campaign ROI medium horizon", "campaign_medium_channel_summary.csv", CAMPAIGN_STAGES["medium"], _campaign_setup, _campaign_medium_score, CAMPAIGN_MEDIUM_REFERENCE),
     "campaign_roi_long": _task("campaign_roi_long", "campaign_roi", "long", "Campaign ROI long horizon", "campaign_long_report.json", CAMPAIGN_STAGES["long"], _campaign_setup, _campaign_long_score, CAMPAIGN_LONG_REFERENCE),
+    "campaign_roi_xlong": _task("campaign_roi_xlong", "campaign_roi", "xlong", "Campaign ROI xlong horizon", "campaign_xlong_report.json", CAMPAIGN_STAGES["xlong"], _campaign_setup, _campaign_xlong_score, CAMPAIGN_XLONG_REFERENCE),
+    "campaign_roi_xxlong": _task("campaign_roi_xxlong", "campaign_roi", "xxlong", "Campaign ROI xxlong horizon", "campaign_xxlong_report.json", CAMPAIGN_STAGES["xxlong"], _campaign_setup, _campaign_xxlong_score, CAMPAIGN_XXLONG_REFERENCE),
 }
 
 

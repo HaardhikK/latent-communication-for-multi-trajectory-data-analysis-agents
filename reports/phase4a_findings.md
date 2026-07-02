@@ -5,8 +5,20 @@ Session 2 reran the long-horizon attribution matrix on Qwen3-8B 4-bit with the f
 ## Claims
 
 - **Confirmed:** the original 7-stage latent collapse was caused by duplicate chat-templated task/prompt re-encoding into the latent KV cache. `C1_phase3_exact` was 3/15 = 0.200 while `C2_dedup` was 11/15 = 0.733; Fisher p=0.0092. Median decode cache length fell from 2828 to 532. `C2_dedup` is statistically indistinguishable from `B_textmas` (12/15 = 0.800, Fisher p=1.0000) while using 0 decoded coordination tokens.
-- **Directional, not yet confirmed:** latent steps added +0.333 over the stage-text-only cache (`C2_dedup` 11/15 = 0.733 vs `C3_no_latent` 6/15 = 0.400), but Fisher p=0.1394; the n=30 confirmation run decides whether this becomes a claim.
-- **No evidence decoded anchors help:** `C5_anchor` was 8/15 = 0.533, worse than `C2_dedup` by -0.200 (Fisher p=0.4497). C5 median cache length was 1258, about 2.4x C2, consistent with anchors re-polluting the cache.
+- **Not confirmed at n=30:** latent steps remained directionally positive but did not reach significance. After Session 3 pooling, `C2_dedup` was 25/30 = 0.833 and `C3_no_latent` was 19/30 = 0.633 (delta +0.200, Fisher p=0.1432; first-attempt p=0.4118). Report this as no confirmed latent-step contribution at this sample size.
+- **No evidence decoded anchors help:** after Session 3 pooling, `C5_anchor` was 17/30 = 0.567 versus `C2_dedup` at 25/30 = 0.833 (delta -0.267, Fisher p=0.0470; first-attempt p=0.2789). C5 median cache length was 1258, about 2.4x C2, consistent with anchors re-polluting the cache.
+
+## Session 3 Confirmation
+
+Session 3 added repeats 6-10 for `C2_dedup`, `C3_no_latent`, and `C5_anchor`, using the exact Session 2 generation commit/hash (`dfdd1fca655851707840b2127ebbc0aa9cc7509b`, `7072860e2ace8afe`). The imported zip had no model weights, HF cache, or token-like strings; hidden-signal smoke and latent tool-roundtrip both passed.
+
+| Variant | Runs | Final pass | Wilson CI | First-attempt pass | Median cache len | Failure rows |
+|---|---:|---:|---|---:|---:|---|
+| C2_dedup | 30 | 0.833 | [0.664, 0.927] | 0.733 | 532 | 3 runtime, 2 semantic |
+| C3_no_latent | 30 | 0.633 | [0.455, 0.781] | 0.600 | 504 | 7 runtime, 4 semantic |
+| C5_anchor | 30 | 0.567 | [0.392, 0.726] | 0.567 | 1258 | 12 runtime, 1 semantic |
+
+Pre-registered decision: `C2_dedup` versus `C3_no_latent` at n=30 gives Fisher p=0.1432, so the latent-step contribution is not confirmed. The stronger follow-up is the per-stage execute-observe-continue benchmark, where latent vectors have more work to do than in this one-execution planning horizon.
 
 ## By Variant
 
