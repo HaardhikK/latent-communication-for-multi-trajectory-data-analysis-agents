@@ -66,6 +66,12 @@ class RunRecord:
     cache_len_at_decode: int = 0
     stage_append_audit_path: str = ""
     anchor_texts_path: str = ""
+    experiment_part: str = ""
+    source_commit: str = ""
+    script_hash: str = ""
+    failure_type: str = ""
+    repair_similarity: float = 0.0
+    repeated_exception: bool = False
     model_calls: list[ModelCallRecord] = field(default_factory=list)
     token_events: list[dict[str, Any]] = field(default_factory=list)
     details: dict[str, Any] = field(default_factory=dict)
@@ -121,6 +127,12 @@ class RunRecord:
             "cache_len_at_decode": self.cache_len_at_decode,
             "stage_append_audit_path": self.stage_append_audit_path,
             "anchor_texts_path": self.anchor_texts_path,
+            "experiment_part": self.experiment_part,
+            "source_commit": self.source_commit,
+            "script_hash": self.script_hash,
+            "failure_type": self.failure_type,
+            "repair_similarity": self.repair_similarity,
+            "repeated_exception": self.repeated_exception,
             "run_dir": self.run_dir,
         }
 

@@ -25,8 +25,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run Tier 2 Phase 4A-lite forensic pilot in resumable chunks.")
     parser.add_argument("--model", default="Qwen/Qwen3-8B")
     parser.add_argument("--quantization", choices=["none", "4bit"], default="4bit")
-    parser.add_argument("--variants", default="C1_current,C2_dedup,C3_no_latent")
+    parser.add_argument("--variants", default="C1_phase3_exact,C2_dedup,C3_no_latent,C5_anchor")
     parser.add_argument("--include-baselines", action="store_true")
+    parser.add_argument("--experiment-part", default="session2")
     parser.add_argument("--families", default="orders_kpi,sensor_quality,campaign_roi")
     parser.add_argument("--horizons", default="long")
     parser.add_argument("--repeat", type=int, default=2)
@@ -46,6 +47,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-dependency-guard", action="store_true")
     parser.add_argument("--skip-gpu-guard", action="store_true")
     parser.add_argument("--skip-plumbing-gates", action="store_true")
+    parser.add_argument("--strict-reuse", action=argparse.BooleanOptionalAction, default=True)
     return parser.parse_args()
 
 
@@ -71,6 +73,7 @@ def main() -> int:
             "runtime_root": str(runtime),
             "dependency_report": dependency_report,
             "gpu_report": gpu,
+            "pip_freeze_path": str(write_pip_freeze()),
             "created_at_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
         },
     )
@@ -111,6 +114,8 @@ def main() -> int:
         str(args.latent_observation_steps),
         "--latent-repair-strategy",
         args.latent_repair_strategy,
+        "--experiment-part",
+        args.experiment_part,
         "--max-new-rows",
         str(args.max_new_rows),
         "--output-prefix",
@@ -118,6 +123,8 @@ def main() -> int:
     ]
     if args.include_baselines:
         command.append("--include-baselines")
+    if not args.strict_reuse:
+        command.append("--no-strict-reuse")
     if resume_csv:
         command.extend(["--resume-from-partial", str(resume_csv)])
     run_command(command)
@@ -171,6 +178,14 @@ def run_plumbing_gates(args: argparse.Namespace) -> int:
     if not roundtrip.get("ok"):
         raise RuntimeError(f"Latent tool-roundtrip failed: {roundtrip}")
     return effective_steps
+
+
+def write_pip_freeze() -> Path:
+    path = project_path("exports", "tier2_phase4_pip_freeze.txt")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    completed = subprocess.run([sys.executable, "-m", "pip", "freeze"], text=True, capture_output=True, check=False)
+    path.write_text(completed.stdout, encoding="utf-8")
+    return path
 
 
 def run_tool_roundtrip(args: argparse.Namespace, out: Path, latent_steps: int) -> None:
@@ -252,6 +267,27 @@ def zip_results(path: Path, output_prefix: str) -> None:
         batch_id = json.loads(manifest.read_text(encoding="utf-8")).get("batch_id")
         if batch_id:
             candidates.extend(runtime_path("runs").glob(f"{batch_id}*"))
+    manifest_path = project_path("exports", f"{output_prefix}_zip_manifest.json")
+    files = [
+        arcname(candidate)
+        for candidate in sorted(set(candidates))
+        if candidate.exists() and candidate.is_file() and not forbidden_result_file(candidate)
+    ]
+    for candidate in sorted(set(candidates)):
+        if candidate.exists() and candidate.is_dir():
+            for file in candidate.rglob("*"):
+                if file.is_file() and not forbidden_result_file(file):
+                    files.append(arcname(file))
+    write_json(
+        manifest_path,
+        {
+            "zip_path": str(path),
+            "file_count": len(sorted(set(files))),
+            "files": sorted(set(files)),
+            "created_at_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+        },
+    )
+    candidates.append(manifest_path)
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for candidate in sorted(set(candidates)):
             if not candidate.exists():

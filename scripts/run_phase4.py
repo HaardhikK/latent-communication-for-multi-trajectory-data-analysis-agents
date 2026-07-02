@@ -3,9 +3,14 @@ from __future__ import annotations
 import argparse
 import csv
 import datetime as dt
+import difflib
+import hashlib
 import json
+import math
 import random
+import re
 import statistics
+import subprocess
 import sys
 import time
 from dataclasses import dataclass, fields
@@ -35,11 +40,15 @@ from latent_agent.metrics import ModelCallRecord, RunRecord, write_csv, write_js
 from latent_agent.models import ModelBackend  # noqa: E402
 from latent_agent.runtime import configure_runtime, project_path, runtime_path  # noqa: E402
 from latent_agent.tasks import ScoreResult, ToyTask  # noqa: E402
-from latent_agent.token_split import FIXED_PROMPT, TOOL_IO, PromptPart, TokenLedger, extract_python_code, render_prompt  # noqa: E402
+from latent_agent.token_split import COORDINATION, FIXED_PROMPT, TOOL_IO, PromptPart, TokenLedger, extract_python_code, render_prompt  # noqa: E402
 
 
-C_VARIANTS = ("C1_current", "C2_dedup", "C3_no_latent")
+C_VARIANTS = ("C1_phase3_exact", "C1_current", "C2_dedup", "C3_no_latent", "C5_anchor")
 BASELINE_MODE_NAMES = {"A": "A_single", "B": "B_textmas"}
+DEFAULT_EXPERIMENT_PART = "session2"
+PRIOR_C1_LONG_PASSES = 3
+PRIOR_C1_LONG_RUNS = 15
+CURRENT_EXPERIMENT_PART = DEFAULT_EXPERIMENT_PART
 
 
 @dataclass(frozen=True)
@@ -61,13 +70,14 @@ class ScheduleItem:
     task: ToyTask
     mode: str
     c_variant: str = ""
+    experiment_part: str = DEFAULT_EXPERIMENT_PART
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run Phase 4A-lite C-variant forensic pilot.")
     parser.add_argument("--model", default="Qwen/Qwen3-1.7B")
     parser.add_argument("--quantization", choices=["none", "4bit"], default="none")
-    parser.add_argument("--variants", default="C1_current,C2_dedup,C3_no_latent")
+    parser.add_argument("--variants", default="C1_phase3_exact,C2_dedup,C3_no_latent,C5_anchor")
     parser.add_argument("--include-baselines", action="store_true")
     parser.add_argument("--baseline-modes", default="A,B")
     parser.add_argument("--tasks", default="")
@@ -86,7 +96,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-new-tokens-critic", type=int, default=140)
     parser.add_argument("--execution-timeout-seconds", type=int, default=30)
     parser.add_argument("--output-prefix", default="phase4_lite")
+    parser.add_argument("--experiment-part", default=DEFAULT_EXPERIMENT_PART)
     parser.add_argument("--resume-from-partial", default="")
+    parser.add_argument("--strict-reuse", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--max-new-rows", type=int, default=0)
     parser.add_argument("--skip-reference-fit", action="store_true")
     parser.add_argument("--debug-decode-latent", action="store_true")
@@ -122,8 +134,10 @@ def make_settings(args: argparse.Namespace, task: ToyTask, budget: dict[str, Any
 def build_stage_append_plan(task: ToyTask, variant: str, latent_steps: int) -> list[StageAppendSpec]:
     if variant not in C_VARIANTS:
         raise ValueError(f"Unknown C variant: {variant}")
+    if variant == "C1_phase3_exact":
+        return []
     specs: list[StageAppendSpec] = []
-    if variant in {"C2_dedup", "C3_no_latent"}:
+    if variant in {"C2_dedup", "C3_no_latent", "C5_anchor"}:
         specs.append(
             StageAppendSpec(
                 call_name="latent_context_once",
@@ -175,6 +189,36 @@ def build_stage_append_plan(task: ToyTask, variant: str, latent_steps: int) -> l
     return specs
 
 
+def run_phase4_phase3_exact(
+    backend: ModelBackend,
+    task: ToyTask,
+    run_root: Path,
+    *,
+    repeat: int,
+    settings,
+    debug_decode_latent: bool = False,
+) -> RunRecord:
+    diagnostics = run_phase3.Phase3LatentDiagnostics()
+    record = run_phase3.run_phase3_latentmas(
+        backend,
+        task,
+        run_root,
+        repeat=repeat,
+        settings=settings,
+        debug_decode_latent=debug_decode_latent,
+        diagnostics=diagnostics,
+    )
+    return enrich_forensics(
+        record,
+        c_variant="C1_phase3_exact",
+        first_code=diagnostics.first_code,
+        first_attempt_passed=diagnostics.first_attempt_passed,
+        cache_len_at_decode=diagnostics.cache_len_at_decode,
+        stage_append_audit=diagnostics.latent_append_audit,
+        anchor_texts=[],
+    )
+
+
 def run_phase4_latent_variant(
     backend: ModelBackend,
     task: ToyTask,
@@ -185,6 +229,16 @@ def run_phase4_latent_variant(
     c_variant: str,
     debug_decode_latent: bool = False,
 ) -> RunRecord:
+    if c_variant == "C1_phase3_exact":
+        return run_phase4_phase3_exact(
+            backend,
+            task,
+            run_root,
+            repeat=repeat,
+            settings=settings,
+            debug_decode_latent=debug_decode_latent,
+        )
+
     run_dir = run_phase3._prepare_run_dir(run_root, f"C_latentmas_{c_variant}", task, repeat)
     ledger = TokenLedger()
     calls: list[ModelCallRecord] = []
@@ -192,6 +246,7 @@ def run_phase4_latent_variant(
     latent = LatentBackend(backend)
     past = None
     stage_append_audit: list[dict[str, Any]] = []
+    anchor_texts: list[str] = []
 
     start = time.perf_counter()
     task.setup(run_dir)
@@ -206,6 +261,18 @@ def run_phase4_latent_variant(
             past_key_values=past,
             audit=stage_append_audit,
         )
+        if c_variant == "C5_anchor" and spec.stage_index:
+            anchor_text, past = _decode_and_append_anchor(
+                latent,
+                backend,
+                ledger,
+                calls,
+                past,
+                stage_index=spec.stage_index,
+                task=task,
+                audit=stage_append_audit,
+            )
+            anchor_texts.append(anchor_text)
 
     cache_len_at_decode = past_length(past)
     coder_parts = run_phase3._phase3_coder_parts(task, mode_label=f"phase4 {c_variant} latent planner -> coder -> critic")
@@ -337,7 +404,7 @@ def run_phase4_latent_variant(
         first_attempt_passed=bool(first_score.passed),
         cache_len_at_decode=cache_len_at_decode,
         stage_append_audit=stage_append_audit,
-        anchor_texts=[],
+        anchor_texts=anchor_texts,
     )
 
 
@@ -375,6 +442,162 @@ def _append_latent_with_audit(
     return result.past_key_values
 
 
+def _decode_and_append_anchor(
+    latent: LatentBackend,
+    backend: ModelBackend,
+    ledger: TokenLedger,
+    calls: list[ModelCallRecord],
+    past_key_values,
+    *,
+    stage_index: int,
+    task: ToyTask,
+    audit: list[dict[str, Any]],
+) -> tuple[str, object]:
+    prompt_parts = [
+        PromptPart(
+            "anchor_system",
+            "Decode one terse stage anchor for the coder. Use one line. No code, imports, assignments, dataframe snippets, or invented schema.",
+            FIXED_PROMPT,
+        ),
+        PromptPart("current_stage", f"Stage {stage_index}/{task.horizon_stages}: {task.stage_specs[stage_index - 1]}", FIXED_PROMPT),
+    ]
+    call_name = f"anchor_decode_stage_{stage_index}"
+    ledger.add_prompt_parts(backend.tokenizer, call_name, prompt_parts)
+    result = latent.decode_from_past(
+        render_prompt(prompt_parts),
+        max_new_tokens=24,
+        past_key_values=past_key_values,
+        temperature=0.0,
+        top_p=1.0,
+        generation_seed=None,
+    )
+    anchor = _sanitize_anchor(result.text)
+    ledger.add_generated(backend.tokenizer, call_name, anchor, COORDINATION)
+    calls.append(ModelCallRecord(call_name=call_name, **result.metrics.__dict__))
+
+    cache_len_before = past_length(result.past_key_values)
+    append = latent.append_latent(
+        anchor,
+        latent_steps=0,
+        past_key_values=result.past_key_values,
+        raw_continuation=True,
+    )
+    calls.append(ModelCallRecord(call_name=f"anchor_append_stage_{stage_index}", **append.metrics.__dict__))
+    audit.append(
+        {
+            "call_name": f"anchor_append_stage_{stage_index}",
+            "stage_index": stage_index,
+            "latent_steps": 0,
+            "raw_continuation": True,
+            "cache_len_before": cache_len_before,
+            "cache_len_after": past_length(append.past_key_values),
+            "input_tokens": append.metrics.input_tokens,
+            "text": anchor,
+            "anchor_decode_raw": result.text,
+        }
+    )
+    return anchor, append.past_key_values
+
+
+def _sanitize_anchor(text: str) -> str:
+    cleaned = run_phase3.sanitize_planner_report(text)
+    line = " ".join(cleaned.splitlines()).strip()
+    line = re.sub(r"\s+", " ", line)
+    return line[:240] or "Follow the authoritative task specification for this stage."
+
+
+def source_commit() -> str:
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=PROJECT_ROOT,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        return completed.stdout.strip()
+    except Exception:
+        return "unknown"
+
+
+def generation_path_hash() -> str:
+    digest = hashlib.sha256()
+    for path in [
+        PROJECT_ROOT / "scripts" / "run_phase3.py",
+        PROJECT_ROOT / "scripts" / "run_phase4.py",
+        PROJECT_ROOT / "src" / "latent_agent" / "agents.py",
+        PROJECT_ROOT / "src" / "latent_agent" / "latent_backend.py",
+        PROJECT_ROOT / "src" / "latent_agent" / "models.py",
+        PROJECT_ROOT / "src" / "latent_agent" / "token_split.py",
+    ]:
+        digest.update(str(path.relative_to(PROJECT_ROOT)).encode("utf-8"))
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def analyze_failure(run_dir: Path, record: RunRecord, *, quality_empty: bool, quality_ast_ok: bool) -> dict[str, Any]:
+    attempt1 = _load_attempt_execution(run_dir, 1)
+    attempt2 = _load_attempt_execution(run_dir, 2)
+    exception1 = _exception_signature(attempt1)
+    exception2 = _exception_signature(attempt2)
+    code1 = _read_text(run_dir / "attempt_1.py")
+    code2 = _read_text(run_dir / "attempt_2.py")
+    similarity = difflib.SequenceMatcher(None, code1, code2).ratio() if code1 and code2 else 0.0
+
+    if record.passed:
+        failure_type = "passed"
+    elif quality_empty:
+        failure_type = "empty_or_degenerate_code"
+    elif not quality_ast_ok:
+        failure_type = "invalid_python"
+    elif _attempt_runtime_failed(attempt1):
+        failure_type = "runtime_bug"
+    elif attempt1 and not (attempt1.get("score", {}) or {}).get("passed", False):
+        failure_type = "semantic_scorer_slip"
+    else:
+        failure_type = "other"
+
+    return {
+        "failure_type": failure_type,
+        "repair_similarity": similarity,
+        "repeated_exception": bool(exception1 and exception1 == exception2),
+        "attempt_1_exception": exception1,
+        "attempt_2_exception": exception2,
+        "attempt_1_returncode": (attempt1.get("execution", {}) or {}).get("returncode") if attempt1 else None,
+        "attempt_2_returncode": (attempt2.get("execution", {}) or {}).get("returncode") if attempt2 else None,
+    }
+
+
+def _load_attempt_execution(run_dir: Path, attempt: int) -> dict[str, Any]:
+    path = run_dir / f"attempt_{attempt}_execution.json"
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+
+
+def _attempt_runtime_failed(attempt: dict[str, Any]) -> bool:
+    execution = attempt.get("execution", {}) if attempt else {}
+    return bool(execution.get("timed_out") or int(execution.get("returncode") or 0) != 0 or execution.get("stderr"))
+
+
+def _exception_signature(attempt: dict[str, Any]) -> str:
+    stderr = ((attempt.get("execution", {}) if attempt else {}).get("stderr") or "").strip()
+    if not stderr:
+        return ""
+    for line in reversed(stderr.splitlines()):
+        stripped = line.strip()
+        if stripped:
+            return stripped[:300]
+    return ""
+
+
+def _read_text(path: Path) -> str:
+    return path.read_text(encoding="utf-8") if path.exists() else ""
+
+
 def enrich_forensics(
     record: RunRecord,
     *,
@@ -409,14 +632,25 @@ def enrich_forensics(
     record.cache_len_at_decode = int(cache_len_at_decode)
     record.stage_append_audit_path = str(stage_path)
     record.anchor_texts_path = str(anchor_path)
+    record.experiment_part = getattr(record, "experiment_part", "") or CURRENT_EXPERIMENT_PART
+    record.source_commit = getattr(record, "source_commit", "") or source_commit()
+    record.script_hash = getattr(record, "script_hash", "") or generation_path_hash()
+    failure = analyze_failure(run_dir, record, quality_empty=quality.empty, quality_ast_ok=quality.ast_ok)
+    record.failure_type = failure["failure_type"]
+    record.repair_similarity = float(failure["repair_similarity"])
+    record.repeated_exception = bool(failure["repeated_exception"])
     record.details.setdefault("phase4", {})
     record.details["phase4"].update(
         {
             "c_variant": c_variant,
+            "experiment_part": record.experiment_part,
+            "source_commit": record.source_commit,
+            "script_hash": record.script_hash,
             "first_attempt_code_quality": quality.to_dict(),
             "cache_len_at_decode": int(cache_len_at_decode),
             "stage_append_audit": stage_append_audit,
             "anchor_texts": anchor_texts,
+            "failure_analysis": failure,
         }
     )
     write_json(run_dir / "run_record.json", record.to_dict())
@@ -442,28 +676,32 @@ def build_schedule(
     *,
     include_baselines: bool,
     baseline_modes: list[str],
+    experiment_part: str = DEFAULT_EXPERIMENT_PART,
 ) -> list[ScheduleItem]:
-    schedule: list[ScheduleItem] = []
+    baseline_schedule: list[ScheduleItem] = []
+    c_schedule: list[ScheduleItem] = []
     if include_baselines:
         for rep in range(1, repeat + 1):
             for task in tasks:
                 for mode in baseline_modes:
-                    schedule.append(ScheduleItem(rep, task, mode, ""))
+                    baseline_schedule.append(ScheduleItem(rep, task, mode, "", experiment_part))
     for rep in range(1, repeat + 1):
         for task in tasks:
             for variant in variants:
-                schedule.append(ScheduleItem(rep, task, "C", variant))
-    random.Random(schedule_seed).shuffle(schedule)
-    return schedule
+                c_schedule.append(ScheduleItem(rep, task, "C", variant, experiment_part))
+    rng = random.Random(schedule_seed)
+    rng.shuffle(baseline_schedule)
+    rng.shuffle(c_schedule)
+    return baseline_schedule + c_schedule
 
 
-def record_key(record: RunRecord) -> tuple[str, str, int, str]:
-    return (record.mode, record.task_id, int(record.repeat), record.c_variant or "")
+def record_key(record: RunRecord) -> tuple[str, str, int, str, str]:
+    return (record.mode, record.task_id, int(record.repeat), record.c_variant or "", record.experiment_part or "")
 
 
-def schedule_key(item: ScheduleItem) -> tuple[str, str, int, str]:
+def schedule_key(item: ScheduleItem) -> tuple[str, str, int, str, str]:
     mode = "C_latentmas" if item.mode == "C" else BASELINE_MODE_NAMES[item.mode]
-    return (mode, item.task.task_id, int(item.repeat), item.c_variant or "")
+    return (mode, item.task.task_id, int(item.repeat), item.c_variant or "", item.experiment_part or DEFAULT_EXPERIMENT_PART)
 
 
 def run_schedule(
@@ -493,6 +731,7 @@ def run_schedule(
         args.schedule_seed,
         include_baselines=args.include_baselines,
         baseline_modes=baseline_modes,
+        experiment_part=args.experiment_part,
     ):
         key = schedule_key(item)
         if key in completed:
@@ -536,6 +775,7 @@ def run_schedule(
                     "task_id": record.task_id,
                     "mode": record.mode,
                     "c_variant": record.c_variant,
+                    "experiment_part": record.experiment_part,
                     "repeat": record.repeat,
                     "passed": record.passed,
                     "first_attempt_passed": record.first_attempt_passed,
@@ -568,6 +808,35 @@ def load_resume_records(path: Path) -> list[RunRecord]:
     return list(records_by_key.values())
 
 
+def filter_resume_records(
+    records: list[RunRecord],
+    *,
+    tasks: list[ToyTask],
+    variants: list[str],
+    args: argparse.Namespace,
+) -> list[RunRecord]:
+    if not args.strict_reuse:
+        return records
+    baseline_modes = [mode for mode in parse_csv_arg(args.baseline_modes) if mode in BASELINE_MODE_NAMES]
+    allowed = {
+        schedule_key(item)
+        for item in build_schedule(
+            tasks,
+            variants,
+            args.repeat,
+            args.schedule_seed,
+            include_baselines=args.include_baselines,
+            baseline_modes=baseline_modes,
+            experiment_part=args.experiment_part,
+        )
+    }
+    kept = [record for record in records if record_key(record) in allowed]
+    dropped = len(records) - len(kept)
+    if dropped:
+        print(f"PHASE4_RESUME_FILTER dropped={dropped} kept={len(kept)} strict_reuse=True", flush=True)
+    return kept
+
+
 def _run_record_from_json(path: Path) -> RunRecord:
     data = json.loads(path.read_text(encoding="utf-8"))
     data["model_calls"] = [ModelCallRecord(**call) for call in data.get("model_calls", [])]
@@ -577,15 +846,25 @@ def _run_record_from_json(path: Path) -> RunRecord:
 
 def summarize_phase4(records: list[RunRecord]) -> str:
     rows = summary_rows(records)
+    by_variant = _aggregate_by_variant(records)
+    decisions = _decision_lines(by_variant)
+    failure_rows = _failure_rows(records)
     lines = [
-        "# Phase 4A-Lite Source-Only Forensic Pilot",
+        "# Phase 4A Session 2 Reproduction And Attribution",
         "",
-        "This pilot tests whether long-horizon latent collapse is partly caused by duplicated/polluted KV-cache construction.",
+        "This run treats final pass and first-attempt pass as co-primary metrics for long-horizon reproduction and attribution.",
         "",
         f"- Rows summarized: `{len(records)}`",
-        f"- Pilot case: **{classify_pilot_case(rows)}**",
+        f"- Source commit: `{source_commit()}`",
+        f"- Generation-path hash: `{generation_path_hash()[:16]}`",
         "",
-        "| Mode | C variant | Task family | Horizon | Runs | Pass rate | First-attempt pass | AST OK | Empty code | Median repetition | Median cache len |",
+        "## Decisions",
+        "",
+        *[f"- {line}" for line in decisions],
+        "",
+        "## By Family",
+        "",
+        "| Mode | C variant | Task family | Horizon | Runs | Final pass | First-attempt pass | AST OK | Empty code | Median repetition | Median cache len |",
         "|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for row in rows:
@@ -595,14 +874,21 @@ def summarize_phase4(records: list[RunRecord]) -> str:
             f"{row['ast_ok_rate']:.3f} | {row['empty_rate']:.3f} | {row['median_repetition_ratio']:.3f} | "
             f"{row['median_cache_len_at_decode']:.0f} |"
         )
-    lines.extend(
-        [
-            "",
-            "Case guide: A means C2_dedup clearly beats C1_current; B means C2 and C3 are similar; "
-            "C means C2 remains poor but usually emits valid Python; D means outputs are often degenerate.",
-            "",
-        ]
-    )
+    lines.extend(["", "## By Variant", ""])
+    lines.append("| Mode | C variant | Runs | Final pass | Final Wilson CI | First-attempt pass | First Wilson CI | Median cache len |")
+    lines.append("|---|---|---:|---:|---|---:|---|---:|")
+    for key, row in sorted(by_variant.items()):
+        lines.append(
+            f"| {row['mode']} | {row['c_variant'] or '-'} | {row['runs']} | {row['pass_rate']:.3f} | "
+            f"[{row['pass_ci'][0]:.3f}, {row['pass_ci'][1]:.3f}] | {row['first_attempt_pass_rate']:.3f} | "
+            f"[{row['first_ci'][0]:.3f}, {row['first_ci'][1]:.3f}] | {row['median_cache_len_at_decode']:.0f} |"
+        )
+    lines.extend(["", "## Failure Classes", ""])
+    lines.append("| Mode | C variant | Failure type | Rows |")
+    lines.append("|---|---|---|---:|")
+    for row in failure_rows:
+        lines.append(f"| {row['mode']} | {row['c_variant'] or '-'} | {row['failure_type']} | {row['rows']} |")
+    lines.extend(["", ""])
     return "\n".join(lines)
 
 
@@ -619,7 +905,9 @@ def summary_rows(records: list[RunRecord]) -> list[dict[str, Any]]:
                 "task_family": family,
                 "horizon_level": horizon,
                 "runs": len(subset),
+                "pass_count": sum(record.passed for record in subset),
                 "pass_rate": _rate(record.passed for record in subset),
+                "first_attempt_pass_count": sum(record.first_attempt_passed for record in subset),
                 "first_attempt_pass_rate": _rate(record.first_attempt_passed for record in subset),
                 "ast_ok_rate": _rate(record.first_attempt_ast_ok for record in subset),
                 "empty_rate": _rate(record.first_attempt_empty for record in subset),
@@ -630,30 +918,106 @@ def summary_rows(records: list[RunRecord]) -> list[dict[str, Any]]:
     return rows
 
 
-def classify_pilot_case(rows: list[dict[str, Any]]) -> str:
-    by_variant: dict[str, list[dict[str, Any]]] = {}
-    for row in rows:
-        if row["mode"] == "C_latentmas":
-            by_variant.setdefault(row["c_variant"], []).append(row)
+def _aggregate_by_variant(records: list[RunRecord]) -> dict[tuple[str, str], dict[str, Any]]:
+    groups: dict[tuple[str, str], list[RunRecord]] = {}
+    for record in records:
+        groups.setdefault((record.mode, record.c_variant), []).append(record)
+    rows: dict[tuple[str, str], dict[str, Any]] = {}
+    for key, subset in groups.items():
+        pass_count = sum(record.passed for record in subset)
+        first_count = sum(record.first_attempt_passed for record in subset)
+        rows[key] = {
+            "mode": key[0],
+            "c_variant": key[1],
+            "runs": len(subset),
+            "pass_count": pass_count,
+            "pass_rate": pass_count / len(subset),
+            "pass_ci": wilson_ci(pass_count, len(subset)),
+            "first_attempt_pass_count": first_count,
+            "first_attempt_pass_rate": first_count / len(subset),
+            "first_ci": wilson_ci(first_count, len(subset)),
+            "median_cache_len_at_decode": _median([float(record.cache_len_at_decode) for record in subset]),
+        }
+    return rows
 
-    def avg(variant: str, field: str) -> float:
-        subset = by_variant.get(variant, [])
-        return sum(float(row[field]) for row in subset) / len(subset) if subset else 0.0
 
-    c1_pass = avg("C1_current", "pass_rate")
-    c2_pass = avg("C2_dedup", "pass_rate")
-    c3_pass = avg("C3_no_latent", "pass_rate")
-    c2_ast = avg("C2_dedup", "ast_ok_rate")
-    c_all_empty = sum(avg(variant, "empty_rate") for variant in C_VARIANTS) / len(C_VARIANTS)
-    if c2_pass >= c1_pass + 0.25:
-        return "Case A: C2_dedup directionally beats C1_current; duplicate prompt/cache pollution is implicated."
-    if abs(c2_pass - c3_pass) <= 0.17:
-        return "Case B: C2_dedup and C3_no_latent are similar; latent vectors may be inert or weak."
-    if c2_pass < 0.5 and c2_ast >= 0.67:
-        return "Case C: C2_dedup remains poor but code is usually valid Python; inspect semantic failures."
-    if c_all_empty >= 0.5 or avg("C2_dedup", "ast_ok_rate") < 0.5:
-        return "Case D: outputs look degenerate; investigate decoding, quantization, or capacity."
-    return "No single case fired cleanly; expand only after inspecting run artifacts."
+def _decision_lines(by_variant: dict[tuple[str, str], dict[str, Any]]) -> list[str]:
+    lines: list[str] = []
+    a = by_variant.get(("A_single", ""))
+    b = by_variant.get(("B_textmas", ""))
+    if a:
+        lines.append(f"Gate 0 A_long: {a['pass_count']}/{a['runs']} final pass; flag threshold is <0.87.")
+    if b:
+        lines.append(f"Gate 0 B_long: {b['pass_count']}/{b['runs']} final pass; expected acceptable band is [0.55, 0.95].")
+    c1 = by_variant.get(("C_latentmas", "C1_phase3_exact"))
+    c2 = by_variant.get(("C_latentmas", "C2_dedup"))
+    c3 = by_variant.get(("C_latentmas", "C3_no_latent"))
+    c5 = by_variant.get(("C_latentmas", "C5_anchor"))
+    if c1:
+        for field, label in (("pass_rate", "final"), ("first_attempt_pass_rate", "first-attempt")):
+            rate = c1[field]
+            if rate <= 0.35:
+                decision = "collapse reproduces"
+            elif rate >= 0.50:
+                decision = "prior collapse looks fragile/noisy"
+            else:
+                decision = "inconclusive; add C1 repeats 6-8 before branching"
+            if label == "final":
+                fisher = fisher_exact_two_sided(int(c1["pass_count"]), int(c1["runs"]), PRIOR_C1_LONG_PASSES, PRIOR_C1_LONG_RUNS)
+                lines.append(f"C1_phase3_exact {label}: {rate:.3f}; {decision}; Fisher vs prior 3/15 p={fisher:.3f}.")
+            else:
+                lines.append(f"C1_phase3_exact {label}: {rate:.3f}; {decision}; no prior first-attempt baseline for Fisher test.")
+    if c1 and c2:
+        lines.append(f"Cache pollution delta C2-C1 final={c2['pass_rate'] - c1['pass_rate']:.3f}; threshold for implicated cache pollution is >=0.25.")
+    if c2 and c3:
+        delta = c2["pass_rate"] - c3["pass_rate"]
+        if abs(delta) <= 0.13:
+            lines.append(f"Latent-step readout C2-C3 final={delta:.3f}: no detectable latent-step contribution at this sample size.")
+        else:
+            lines.append(f"Latent-step readout C2-C3 final={delta:.3f}: latent steps differ detectably in this run.")
+    if c5 and c2:
+        lines.append(f"Anchor effect primary C5-C2 final={c5['pass_rate'] - c2['pass_rate']:.3f}.")
+    if c5 and c3:
+        lines.append(f"Anchor secondary C5-C3 final={c5['pass_rate'] - c3['pass_rate']:.3f}; interpret only if C2 and C3 are similar.")
+    return lines or ["No decision rows available yet."]
+
+
+def _failure_rows(records: list[RunRecord]) -> list[dict[str, Any]]:
+    groups: dict[tuple[str, str, str], int] = {}
+    for record in records:
+        groups[(record.mode, record.c_variant, record.failure_type or "unknown")] = groups.get((record.mode, record.c_variant, record.failure_type or "unknown"), 0) + 1
+    return [
+        {"mode": mode, "c_variant": variant, "failure_type": failure, "rows": rows}
+        for (mode, variant, failure), rows in sorted(groups.items())
+    ]
+
+
+def wilson_ci(successes: int, n: int, z: float = 1.96) -> tuple[float, float]:
+    if n <= 0:
+        return (0.0, 0.0)
+    p = successes / n
+    denom = 1 + z * z / n
+    center = (p + z * z / (2 * n)) / denom
+    half = z * math.sqrt((p * (1 - p) + z * z / (4 * n)) / n) / denom
+    return (max(0.0, center - half), min(1.0, center + half))
+
+
+def fisher_exact_two_sided(a_success: int, a_n: int, b_success: int, b_n: int) -> float:
+    total_success = a_success + b_success
+    total_n = a_n + b_n
+    observed = _hypergeom_prob(a_success, a_n, total_success, total_n)
+    lo = max(0, total_success - b_n)
+    hi = min(a_n, total_success)
+    p = 0.0
+    for x in range(lo, hi + 1):
+        prob = _hypergeom_prob(x, a_n, total_success, total_n)
+        if prob <= observed + 1e-12:
+            p += prob
+    return min(1.0, p)
+
+
+def _hypergeom_prob(x: int, draws: int, successes: int, total: int) -> float:
+    return math.comb(successes, x) * math.comb(total - successes, draws - x) / math.comb(total, draws)
 
 
 def _rate(values) -> float:
@@ -667,7 +1031,9 @@ def _median(values: list[float]) -> float:
 
 
 def main() -> int:
+    global CURRENT_EXPERIMENT_PART
     args = parse_args()
+    CURRENT_EXPERIMENT_PART = args.experiment_part
     configure_runtime(create=True)
     variants = validate_variants(parse_csv_arg(args.variants))
     task_ids = parse_csv_arg(args.tasks) or None
@@ -683,6 +1049,7 @@ def main() -> int:
         print("PHASE4_REFERENCE_FIT_OK", json.dumps(reference_rows, sort_keys=True), flush=True)
 
     initial_records = load_resume_records(Path(args.resume_from_partial)) if args.resume_from_partial else []
+    initial_records = filter_resume_records(initial_records, tasks=tasks, variants=variants, args=args) if initial_records else []
     if initial_records:
         print(f"PHASE4_RESUME_LOADED rows={len(initial_records)} path={args.resume_from_partial}", flush=True)
     records = run_schedule(args, backend, tasks, variants, budget_table, batch_id, initial_records=initial_records)
@@ -704,6 +1071,9 @@ def main() -> int:
         "families": [task.task_family for task in tasks],
         "horizons": sorted({task.horizon_level for task in tasks}),
         "repeat": args.repeat,
+        "experiment_part": args.experiment_part,
+        "source_commit": source_commit(),
+        "script_hash": generation_path_hash(),
         "base_generation_seed": args.base_generation_seed,
         "schedule_seed": args.schedule_seed,
         "temperature": args.temperature,

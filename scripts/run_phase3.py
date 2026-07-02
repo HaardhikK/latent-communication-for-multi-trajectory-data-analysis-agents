@@ -11,7 +11,7 @@ import statistics
 import sys
 import time
 from collections import defaultdict
-from dataclasses import fields
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
@@ -38,7 +38,7 @@ from latent_agent.agents import (  # noqa: E402
 )
 from latent_agent.executor import execute_python_code  # noqa: E402
 from latent_agent.horizon_tasks import HORIZON_ORDER, selected_horizon_tasks  # noqa: E402
-from latent_agent.latent_backend import LatentBackend  # noqa: E402
+from latent_agent.latent_backend import LatentBackend, past_length  # noqa: E402
 from latent_agent.metrics import ModelCallRecord, RunRecord, write_csv, write_json  # noqa: E402
 from latent_agent.models import ModelBackend  # noqa: E402
 from latent_agent.runtime import configure_runtime, project_path, runtime_path  # noqa: E402
@@ -50,6 +50,14 @@ BASE_BUDGETS = {"short": 512, "medium": 768, "long": 1152}
 BUDGET_CAPS = {"short": 768, "medium": 1024, "long": 1536}
 HORIZON_LABELS = ["short", "medium", "long"]
 MODE_RECORD_NAMES = {"A": "A_single", "B": "B_textmas", "C": "C_latentmas"}
+
+
+@dataclass
+class Phase3LatentDiagnostics:
+    cache_len_at_decode: int = 0
+    first_code: str = ""
+    first_attempt_passed: bool = False
+    latent_append_audit: list[dict[str, Any]] = field(default_factory=list)
 
 
 def parse_args() -> argparse.Namespace:
@@ -398,6 +406,36 @@ def run_phase3_textmas(
     )
 
 
+def _diagnostic_latent_append(
+    diagnostics: Phase3LatentDiagnostics | None,
+    *,
+    call_name: str,
+    parts: list[PromptPart],
+    latent_steps: int,
+    past_before,
+    past_after,
+    raw_continuation: bool = False,
+) -> None:
+    if diagnostics is None:
+        return
+    diagnostics.latent_append_audit.append(
+        {
+            "call_name": call_name,
+            "stage_index": _stage_index_from_call(call_name),
+            "latent_steps": latent_steps,
+            "raw_continuation": raw_continuation,
+            "cache_len_before": past_length(past_before),
+            "cache_len_after": past_length(past_after),
+            "text": render_prompt(parts),
+        }
+    )
+
+
+def _stage_index_from_call(call_name: str) -> int:
+    match = re.search(r"stage_(\d+)$", call_name)
+    return int(match.group(1)) if match else 0
+
+
 def run_phase3_latentmas(
     backend: ModelBackend,
     task: ToyTask,
@@ -406,6 +444,7 @@ def run_phase3_latentmas(
     repeat: int,
     settings: AgentSettings,
     debug_decode_latent: bool = False,
+    diagnostics: Phase3LatentDiagnostics | None = None,
 ) -> RunRecord:
     run_dir = _prepare_run_dir(run_root, "C_latentmas", task, repeat)
     ledger = TokenLedger()
@@ -418,29 +457,41 @@ def run_phase3_latentmas(
     task.setup(run_dir)
 
     for index, stage in enumerate(task.stage_specs, start=1):
+        parts = [
+            PromptPart(
+                "planner_system",
+                "You are the latent planner in a multi-stage planner -> coder -> critic pipeline. "
+                "Update hidden working memory with an advisory checklist for only the current stage. "
+                "Do not invent columns, file names, formulas, or output keys; exact requirements come from the decoded task spec. Do not emit text.",
+                FIXED_PROMPT,
+            ),
+            PromptPart("task", task.prompt, FIXED_PROMPT),
+            PromptPart("current_stage", f"Stage {index}/{task.horizon_stages}: {stage}", FIXED_PROMPT),
+        ]
+        past_before = past
         past = _latent_append(
             latent,
             backend,
             ledger,
             calls,
             f"latent_planner_stage_{index}",
-            [
-                PromptPart(
-                    "planner_system",
-                    "You are the latent planner in a multi-stage planner -> coder -> critic pipeline. "
-                    "Update hidden working memory with an advisory checklist for only the current stage. "
-                    "Do not invent columns, file names, formulas, or output keys; exact requirements come from the decoded task spec. Do not emit text.",
-                    FIXED_PROMPT,
-                ),
-                PromptPart("task", task.prompt, FIXED_PROMPT),
-                PromptPart("current_stage", f"Stage {index}/{task.horizon_stages}: {stage}", FIXED_PROMPT),
-            ],
+            parts,
             latent_steps=settings.latent_steps,
             past_key_values=past,
+        )
+        _diagnostic_latent_append(
+            diagnostics,
+            call_name=f"latent_planner_stage_{index}",
+            parts=parts,
+            latent_steps=settings.latent_steps,
+            past_before=past_before,
+            past_after=past,
         )
 
     coder_parts = _phase3_coder_parts(task, mode_label="latent planner -> coder -> critic")
     _write_prompt_audit(run_dir, "latent_coder_prompt.txt", coder_parts)
+    if diagnostics is not None:
+        diagnostics.cache_len_at_decode = past_length(past)
     code_text, past = _latent_decode(
         latent,
         backend,
@@ -457,41 +508,64 @@ def run_phase3_latentmas(
     exec_result, score = _execute_and_score(code_text, task, run_dir, 1, settings.execution_timeout_seconds)
     exec_results.append(exec_result)
     attempts = 1
+    if diagnostics is not None:
+        diagnostics.first_code = code_text
+        diagnostics.first_attempt_passed = bool(score.passed)
 
+    tool_parts = [
+        PromptPart(
+            "tool_observation_system",
+            "Ingest this decoded code execution result into latent working memory for the critic. Do not emit text.",
+            FIXED_PROMPT,
+        ),
+        PromptPart("code_and_execution", _repair_context(code_text, exec_result, score), TOOL_IO),
+    ]
+    past_before = past
     past = _latent_append(
         latent,
         backend,
         ledger,
         calls,
         "latent_tool_observation",
-        [
-            PromptPart(
-                "tool_observation_system",
-                "Ingest this decoded code execution result into latent working memory for the critic. Do not emit text.",
-                FIXED_PROMPT,
-            ),
-            PromptPart("code_and_execution", _repair_context(code_text, exec_result, score), TOOL_IO),
-        ],
+        tool_parts,
         latent_steps=settings.latent_observation_steps,
         past_key_values=past,
     )
+    _diagnostic_latent_append(
+        diagnostics,
+        call_name="latent_tool_observation",
+        parts=tool_parts,
+        latent_steps=settings.latent_observation_steps,
+        past_before=past_before,
+        past_after=past,
+    )
 
+    critic_parts = [
+        PromptPart(
+            "critic_system",
+            "You are the latent critic. Update hidden memory with whether all stages and outputs passed. Do not emit text.",
+            FIXED_PROMPT,
+        ),
+        PromptPart("task", task.prompt, FIXED_PROMPT),
+    ]
+    past_before = past
     past = _latent_append(
         latent,
         backend,
         ledger,
         calls,
         "latent_critic",
-        [
-            PromptPart(
-                "critic_system",
-                "You are the latent critic. Update hidden memory with whether all stages and outputs passed. Do not emit text.",
-                FIXED_PROMPT,
-            ),
-            PromptPart("task", task.prompt, FIXED_PROMPT),
-        ],
+        critic_parts,
         latent_steps=settings.latent_steps,
         past_key_values=past,
+    )
+    _diagnostic_latent_append(
+        diagnostics,
+        call_name="latent_critic",
+        parts=critic_parts,
+        latent_steps=settings.latent_steps,
+        past_before=past_before,
+        past_after=past,
     )
 
     if settings.allow_repair and not score.passed:
@@ -746,6 +820,12 @@ def _run_record_from_flat_row(row: dict[str, str]) -> RunRecord:
         cache_len_at_decode=int(row.get("cache_len_at_decode") or 0),
         stage_append_audit_path=row.get("stage_append_audit_path", ""),
         anchor_texts_path=row.get("anchor_texts_path", ""),
+        experiment_part=row.get("experiment_part", ""),
+        source_commit=row.get("source_commit", ""),
+        script_hash=row.get("script_hash", ""),
+        failure_type=row.get("failure_type", ""),
+        repair_similarity=float(row.get("repair_similarity") or 0.0),
+        repeated_exception=_coerce_bool(row.get("repeated_exception", False)),
     )
 
 
