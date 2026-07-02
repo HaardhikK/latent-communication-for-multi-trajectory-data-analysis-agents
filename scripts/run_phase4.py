@@ -718,7 +718,9 @@ def main() -> int:
     }
     write_json(project_path("exports", f"{prefix}_manifest.json"), manifest)
     summary = summarize_phase4(records)
-    project_path("reports", f"{prefix}_summary.md").write_text(summary, encoding="utf-8")
+    summary_path = project_path("reports", f"{prefix}_summary.md")
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_path.write_text(summary, encoding="utf-8")
     print(summary)
     return 0
 
