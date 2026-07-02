@@ -968,18 +968,57 @@ def _decision_lines(by_variant: dict[tuple[str, str], dict[str, Any]]) -> list[s
             else:
                 lines.append(f"C1_phase3_exact {label}: {rate:.3f}; {decision}; no prior first-attempt baseline for Fisher test.")
     if c1 and c2:
-        lines.append(f"Cache pollution delta C2-C1 final={c2['pass_rate'] - c1['pass_rate']:.3f}; threshold for implicated cache pollution is >=0.25.")
+        lines.append(_pair_delta_line("Cache pollution", "C2-C1", c2, c1, "pass"))
+        lines.append(_pair_delta_line("Cache pollution", "C2-C1", c2, c1, "first"))
     if c2 and c3:
         delta = c2["pass_rate"] - c3["pass_rate"]
+        p_value = _fisher_between(c2, c3, "pass")
         if abs(delta) <= 0.13:
-            lines.append(f"Latent-step readout C2-C3 final={delta:.3f}: no detectable latent-step contribution at this sample size.")
+            lines.append(f"Latent-step readout C2-C3 final={delta:.3f}; Fisher p={p_value:.3f}: no detectable latent-step contribution at this sample size.")
         else:
-            lines.append(f"Latent-step readout C2-C3 final={delta:.3f}: latent steps differ detectably in this run.")
+            lines.append(f"Latent-step readout C2-C3 final={delta:.3f}; Fisher p={p_value:.3f}: latent steps differ directionally in this run.")
+        lines.append(_pair_delta_line("Latent-step readout", "C2-C3", c2, c3, "first"))
     if c5 and c2:
-        lines.append(f"Anchor effect primary C5-C2 final={c5['pass_rate'] - c2['pass_rate']:.3f}.")
+        lines.append(_pair_delta_line("Anchor effect primary", "C5-C2", c5, c2, "pass"))
+        lines.append(_pair_delta_line("Anchor effect primary", "C5-C2", c5, c2, "first"))
     if c5 and c3:
-        lines.append(f"Anchor secondary C5-C3 final={c5['pass_rate'] - c3['pass_rate']:.3f}; interpret only if C2 and C3 are similar.")
+        lines.append(_pair_delta_line("Anchor secondary", "C5-C3", c5, c3, "pass") + "; interpret only if C2 and C3 are similar.")
+    if b:
+        for label, row in (
+            ("C1-vs-B", c1),
+            ("C2-vs-B", c2),
+            ("C3-vs-B", c3),
+            ("C5-vs-B", c5),
+        ):
+            if row:
+                lines.append(_pair_delta_line("Text-baseline comparison", label, row, b, "pass"))
     return lines or ["No decision rows available yet."]
+
+
+def _pair_delta_line(prefix: str, label: str, left: dict[str, Any], right: dict[str, Any], metric: str) -> str:
+    if metric == "pass":
+        left_rate = float(left["pass_rate"])
+        right_rate = float(right["pass_rate"])
+        metric_label = "final"
+    elif metric == "first":
+        left_rate = float(left["first_attempt_pass_rate"])
+        right_rate = float(right["first_attempt_pass_rate"])
+        metric_label = "first-attempt"
+    else:
+        raise ValueError(f"unknown metric: {metric}")
+    return f"{prefix} delta {label} {metric_label}={left_rate - right_rate:.3f}; Fisher p={_fisher_between(left, right, metric):.3f}"
+
+
+def _fisher_between(left: dict[str, Any], right: dict[str, Any], metric: str) -> float:
+    if metric == "pass":
+        left_count = int(left["pass_count"])
+        right_count = int(right["pass_count"])
+    elif metric == "first":
+        left_count = int(left["first_attempt_pass_count"])
+        right_count = int(right["first_attempt_pass_count"])
+    else:
+        raise ValueError(f"unknown metric: {metric}")
+    return fisher_exact_two_sided(left_count, int(left["runs"]), right_count, int(right["runs"]))
 
 
 def _failure_rows(records: list[RunRecord]) -> list[dict[str, Any]]:

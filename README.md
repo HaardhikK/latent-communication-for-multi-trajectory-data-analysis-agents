@@ -41,13 +41,14 @@ prototype adds:
 
 ### Accuracy
 
-Pass rate over the 8B free-cloud horizon sweep:
+Pass rate over the 8B free-cloud horizon sweep and the Phase 4A attribution run:
 
-| Mode | Short (3 stages) | Medium (5 stages) | Long (7 stages) |
+| Mode / variant | Short (3 stages) | Medium (5 stages) | Long (7 stages) |
 |---|---:|---:|---:|
 | A, single agent | 1.00 | 1.00 | 1.00 |
 | B, text multi-agent | 0.93 | 0.87 | 0.80 |
-| C, latent multi-agent | 1.00 | 1.00 | 0.20 |
+| C, prior latent pipeline | 1.00 | 1.00 | 0.20 |
+| C2, deduplicated latent cache | not rerun | not rerun | 0.73 |
 
 ### Efficiency
 
@@ -61,14 +62,20 @@ Median text-vs-latent coordination cost:
 
 Short and medium tasks show the useful regime: latent coordination matches the
 single-agent and text multi-agent baselines while eliminating decoded
-coordination tokens and reducing model latency. At the 7-stage horizon, the
-training-free latent channel fails sharply while the text baseline degrades more
-gently. The tasks remain solvable by the single agent, so the failure is a
-long-horizon latent-memory limitation rather than task impossibility.
+coordination tokens and reducing model latency. The prior 7-stage latent result
+looked like a sharp training-free latent collapse, but Phase 4A traced that
+failure to an implementation artifact: the latent pipeline repeatedly appended
+chat-templated copies of the full task prompt into the KV cache before code
+decoding. The exact old path (`C1_phase3_exact`) reproduced the 3/15 long-horizon
+result, while a deduplicated cache path (`C2_dedup`) reached 11/15, statistically
+indistinguishable from the text baseline's 12/15 while still using zero decoded
+coordination tokens.
 
-Pure latent repair and hybrid text-grounded repair show the same long-horizon
-accuracy pattern at 8B, suggesting that the main failure is accumulated latent
-coordination state rather than the repair strategy alone.
+The current evidence is therefore: cache construction matters strongly; latent
+steps are directionally helpful but not yet statistically confirmed; decoded
+anchors did not help and appear to re-pollute the cache. See
+[`reports/phase4a_findings.md`](reports/phase4a_findings.md) for the Phase 4A
+tables, confidence intervals, and Fisher exact tests.
 
 ## Setup
 
@@ -131,8 +138,9 @@ execution at the end. A stronger follow-up is a per-stage
 `execute -> observe -> continue` horizon where latent memory must survive many
 tool-call boundaries.
 
-The main technical next step is to move beyond the training-free latent channel:
-train a small RecursiveMAS-style latent module so the shared state stays faithful
-over longer chains. A larger coder model, such as an approximately 30B model in
-4-bit, would also test whether the long-horizon collapse is partly model-scale
-dependent.
+The immediate next step is to find the real horizon ceiling after fixing cache
+construction: test 9- and 11-stage variants with `C2_dedup` against the text
+baseline. If deduplicated latent coordination then collapses while text holds,
+that becomes the evidence-backed target for a small RecursiveMAS-style latent
+module or adapter. A larger coder model, such as an approximately 30B model in
+4-bit, would also test whether the ceiling is partly model-scale dependent.

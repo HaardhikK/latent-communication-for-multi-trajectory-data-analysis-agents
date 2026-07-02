@@ -4,6 +4,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from latent_agent.metrics import RunRecord
 
 
@@ -13,6 +15,7 @@ if str(SCRIPTS) not in sys.path:
 
 import run_phase3  # noqa: E402
 import run_phase4  # noqa: E402
+import write_phase4a_findings  # noqa: E402
 
 
 def test_phase4_c2_stage_appends_do_not_repeat_full_task_prompt():
@@ -186,6 +189,42 @@ def test_phase3_old_flat_rows_load_with_phase4_defaults():
     assert record.cache_len_at_decode == 0
     assert record.experiment_part == ""
     assert record.failure_type == ""
+
+
+def test_phase4_fisher_exact_known_tables():
+    assert run_phase4.fisher_exact_two_sided(11, 15, 3, 15) == pytest.approx(0.00922057, abs=1e-6)
+    assert run_phase4.fisher_exact_two_sided(11, 15, 6, 15) == pytest.approx(0.13941976, abs=1e-6)
+
+
+def test_phase4_summary_prints_preregistered_pair_p_values(tmp_path):
+    records = []
+    for mode, variant, passes in [
+        ("B_textmas", "", 12),
+        ("C_latentmas", "C1_phase3_exact", 3),
+        ("C_latentmas", "C2_dedup", 11),
+        ("C_latentmas", "C3_no_latent", 6),
+        ("C_latentmas", "C5_anchor", 8),
+    ]:
+        for i in range(15):
+            record = _record(tmp_path / f"{mode}_{variant}_{i}")
+            record.mode = mode
+            record.c_variant = variant
+            record.repeat = i + 1
+            record.passed = i < passes
+            record.first_attempt_passed = i < passes
+            records.append(record)
+    summary = run_phase4.summarize_phase4(records)
+    assert "Cache pollution delta C2-C1 final=0.533; Fisher p=0.009" in summary
+    assert "Latent-step readout C2-C3 final=0.333; Fisher p=0.139" in summary
+    assert "Anchor effect primary delta C5-C2 final=-0.200; Fisher p=0.450" in summary
+    assert "Text-baseline comparison delta C2-vs-B final=-0.067; Fisher p=1.000" in summary
+
+
+def test_phase4_anchor_classifier_flags_polluted_anchor_text():
+    assert write_phase4a_findings.classify_anchor("Stage 3/7: Join metadata.Stage 4/7: Compute alerts") == "wrong"
+    assert write_phase4a_findings.classify_anchor("Follow the authoritative task specification for this stage.") == "vague"
+    assert write_phase4a_findings.classify_anchor("df.groupby('site').agg(alert_count=('alert','sum'))") == "code-like"
+    assert write_phase4a_findings.classify_anchor("Aggregate daily site alerts and save the requested summary.") == "faithful"
 
 
 def _fake_task():

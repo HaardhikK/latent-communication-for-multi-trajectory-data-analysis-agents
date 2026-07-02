@@ -25,6 +25,9 @@ dist/
 imports/
 exports/
 reports/
+!reports/
+reports/*
+!reports/phase4a_findings.md
 *.zip
 *.csv
 *.jsonl
@@ -48,3 +51,4 @@ kaggle.json
 # Internal/private markdown. The public repository keeps README.md only.
 *.md
 !README.md
+!reports/phase4a_findings.md
