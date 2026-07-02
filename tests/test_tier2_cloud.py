@@ -173,8 +173,12 @@ def test_package_cloud_excludes_old_outputs():
     packaged = [path.relative_to(package_cloud.PROJECT_ROOT).as_posix() for path in package_cloud.collect_package_files()]
     assert "src/latent_agent/cloud.py" in packaged
     assert "notebooks/tier2_short_gate.ipynb" in packaged
+    assert "notebooks/tier2_phase4_lite.ipynb" in packaged
     assert "README.md" in packaged
     assert not any(path.endswith(".md") and path != "README.md" for path in packaged)
+    assert "src/latent_agent/code_quality.py" in packaged
+    assert "scripts/run_phase4.py" in packaged
+    assert "scripts/run_tier2_phase4.py" in packaged
     assert "scripts/run_tier2_full_sweep.py" in packaged
     assert not any(path.startswith("exports/") for path in packaged)
     assert not any(path.startswith("reports/") for path in packaged)
@@ -191,6 +195,16 @@ def test_notebook_contains_required_tier2_cells():
     assert "scripts/run_tier2_gate.py" in joined
     assert "Qwen/Qwen3-8B" in joined
     assert "tier2_short_gate_results.zip" in joined
+
+
+def test_phase4_notebook_contains_required_cells():
+    notebook = json.loads((Path(__file__).resolve().parents[1] / "notebooks" / "tier2_phase4_lite.ipynb").read_text())
+    joined = "\n".join("".join(cell.get("source", [])) for cell in notebook["cells"])
+    assert "CUDA_VISIBLE_DEVICES" in joined
+    assert "bitsandbytes==0.46.1" in joined
+    assert "scripts/run_tier2_phase4.py" in joined
+    assert "C1_current,C2_dedup,C3_no_latent" in joined
+    assert "tier2_phase4_lite_checkpoint.zip" in joined
 
 
 def test_import_tier2_results_recomputes_valid_gate(tmp_path):

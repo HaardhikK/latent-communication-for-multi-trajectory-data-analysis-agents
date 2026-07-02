@@ -110,6 +110,7 @@ python scripts/run_phase1.py --mode both --repeat 1
 python scripts/latent_hidden_smoke.py --model Qwen/Qwen3-1.7B
 python scripts/latent_tool_roundtrip.py --model Qwen/Qwen3-1.7B
 python scripts/run_phase3.py --mode all --horizons short,medium,long --repeat 5
+python scripts/run_phase4.py --variants C1_current,C2_dedup,C3_no_latent --horizons long --repeat 2
 ```
 
 Free-cloud 8B runs use 4-bit quantization and a single visible T4-class GPU:
@@ -117,6 +118,7 @@ Free-cloud 8B runs use 4-bit quantization and a single visible T4-class GPU:
 ```bash
 python scripts/run_tier2_gate.py --model Qwen/Qwen3-8B --quantization 4bit
 python scripts/run_tier2_full_sweep.py --model Qwen/Qwen3-8B --quantization 4bit
+python scripts/run_tier2_phase4.py --model Qwen/Qwen3-8B --quantization 4bit
 ```
 
 The full sweep runner supports checkpoint/resume with `--max-new-rows` and

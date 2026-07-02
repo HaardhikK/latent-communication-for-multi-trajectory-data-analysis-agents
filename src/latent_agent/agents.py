@@ -461,12 +461,14 @@ def _latent_append(
     *,
     latent_steps: int,
     past_key_values,
+    raw_continuation: bool = False,
 ):
     ledger.add_prompt_parts(backend.tokenizer, call_name, parts)
     result = latent.append_latent(
         render_prompt(parts),
         latent_steps=latent_steps,
         past_key_values=past_key_values,
+        raw_continuation=raw_continuation,
     )
     calls.append(ModelCallRecord(call_name=call_name, **result.metrics.__dict__))
     return result.past_key_values

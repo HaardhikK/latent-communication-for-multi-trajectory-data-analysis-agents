@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import torch
 
-from latent_agent.latent_backend import past_length
+from latent_agent.latent_backend import LatentBackend, past_length
 from latent_agent.metrics import ModelCallRecord, RunRecord, write_json
 
 
@@ -54,3 +54,35 @@ def test_run_record_serializes_latent_steps(tmp_path):
     write_json(path, record.to_dict())
     text = path.read_text(encoding="utf-8")
     assert '"latent_steps": 4' in text
+
+
+def test_latent_backend_raw_continuation_skips_chat_template():
+    calls = []
+
+    class FakeTokenizer:
+        def __call__(self, text, return_tensors=None, **kwargs):
+            calls.append({"text": text, "kwargs": kwargs})
+            return {
+                "input_ids": torch.tensor([[1, 2, 3]]),
+                "attention_mask": torch.tensor([[1, 1, 1]]),
+            }
+
+    class FakeBackend:
+        tokenizer = FakeTokenizer()
+
+        @staticmethod
+        def _format_prompt(prompt: str) -> str:
+            return f"CHAT::{prompt}"
+
+    latent = LatentBackend.__new__(LatentBackend)
+    latent.backend = FakeBackend()
+    latent.tokenizer = latent.backend.tokenizer
+    latent.device = "cpu"
+
+    raw = latent._encode_prompt("Stage 1: clean", raw_continuation=True)
+    normal = latent._encode_prompt("Stage 1: clean", raw_continuation=False)
+
+    assert raw["input_ids"].shape == (1, 3)
+    assert calls[0]["text"] == "Stage 1: clean"
+    assert calls[0]["kwargs"]["add_special_tokens"] is False
+    assert calls[1]["text"] == "CHAT::Stage 1: clean"

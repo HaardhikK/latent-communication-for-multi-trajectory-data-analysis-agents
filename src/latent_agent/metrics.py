@@ -58,6 +58,14 @@ class RunRecord:
     requested_latent_steps: int = 0
     effective_latent_steps: int = 0
     oom_fallback_used: bool = False
+    c_variant: str = ""
+    first_attempt_passed: bool = False
+    first_attempt_ast_ok: bool = False
+    first_attempt_empty: bool = False
+    first_attempt_repetition_ratio: float = 0.0
+    cache_len_at_decode: int = 0
+    stage_append_audit_path: str = ""
+    anchor_texts_path: str = ""
     model_calls: list[ModelCallRecord] = field(default_factory=list)
     token_events: list[dict[str, Any]] = field(default_factory=list)
     details: dict[str, Any] = field(default_factory=dict)
@@ -105,6 +113,14 @@ class RunRecord:
             "requested_latent_steps": self.requested_latent_steps,
             "effective_latent_steps": self.effective_latent_steps,
             "oom_fallback_used": self.oom_fallback_used,
+            "c_variant": self.c_variant,
+            "first_attempt_passed": self.first_attempt_passed,
+            "first_attempt_ast_ok": self.first_attempt_ast_ok,
+            "first_attempt_empty": self.first_attempt_empty,
+            "first_attempt_repetition_ratio": self.first_attempt_repetition_ratio,
+            "cache_len_at_decode": self.cache_len_at_decode,
+            "stage_append_audit_path": self.stage_append_audit_path,
+            "anchor_texts_path": self.anchor_texts_path,
             "run_dir": self.run_dir,
         }
 

@@ -62,6 +62,8 @@ def collect_package_files(root: Path = PROJECT_ROOT) -> list[Path]:
         parts = set(rel.parts)
         if parts & EXCLUDE_DIRS:
             continue
+        if any(part.startswith(".pytest_tmp") for part in rel.parts):
+            continue
         if path.is_dir():
             continue
         if path.suffix.lower() not in INCLUDE_SUFFIXES:

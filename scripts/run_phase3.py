@@ -738,6 +738,14 @@ def _run_record_from_flat_row(row: dict[str, str]) -> RunRecord:
         requested_latent_steps=int(row.get("requested_latent_steps") or 0),
         effective_latent_steps=int(row.get("effective_latent_steps") or 0),
         oom_fallback_used=_coerce_bool(row.get("oom_fallback_used", False)),
+        c_variant=row.get("c_variant", ""),
+        first_attempt_passed=_coerce_bool(row.get("first_attempt_passed", False)),
+        first_attempt_ast_ok=_coerce_bool(row.get("first_attempt_ast_ok", False)),
+        first_attempt_empty=_coerce_bool(row.get("first_attempt_empty", False)),
+        first_attempt_repetition_ratio=float(row.get("first_attempt_repetition_ratio") or 0.0),
+        cache_len_at_decode=int(row.get("cache_len_at_decode") or 0),
+        stage_append_audit_path=row.get("stage_append_audit_path", ""),
+        anchor_texts_path=row.get("anchor_texts_path", ""),
     )
 
 

@@ -63,9 +63,10 @@ class LatentBackend:
         *,
         latent_steps: int,
         past_key_values: Any = None,
+        raw_continuation: bool = False,
     ) -> LatentCallResult:
         torch = self.torch
-        encoded = self._encode_prompt(prompt)
+        encoded = self._encode_prompt(prompt, raw_continuation=raw_continuation)
         input_ids = encoded["input_ids"]
         attention_mask = encoded["attention_mask"]
         input_tokens = int(attention_mask.sum().item())
@@ -244,9 +245,12 @@ class LatentBackend:
             return sorted_indices.gather(dim=-1, index=sampled)
         return torch.multinomial(probs, num_samples=1)
 
-    def _encode_prompt(self, prompt: str) -> dict[str, torch.Tensor]:
-        model_prompt = self.backend._format_prompt(prompt)
-        encoded = self.tokenizer(model_prompt, return_tensors="pt")
+    def _encode_prompt(self, prompt: str, *, raw_continuation: bool = False) -> dict[str, torch.Tensor]:
+        if raw_continuation:
+            encoded = self.tokenizer(prompt, return_tensors="pt", add_special_tokens=False)
+        else:
+            model_prompt = self.backend._format_prompt(prompt)
+            encoded = self.tokenizer(model_prompt, return_tensors="pt")
         return {key: value.to(self.device) for key, value in encoded.items()}
 
     def _extend_attention_mask(self, attention_mask: torch.Tensor, past_key_values: Any) -> torch.Tensor:
