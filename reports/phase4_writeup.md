@@ -89,10 +89,14 @@ Phase 4C attempted to extend the clean-cache question from 7 stages to 9 stages 
 | Smoke after formula clarification | `9a169a9` | 6 | 2/3 | 3/3 | Sensor still failed for A |
 | Sensor-only smoke | `9fb180b` | 2 | 0/1 | 0/1 | Formula wording induced invalid pandas code |
 | Sensor-only smoke | `40d6c46` | 2 | 0/1 | 1/1 | A still wrote site-hour output to the site-summary file |
+| P100 guard check | `db55d7d` | 0 | not run | not run | Kaggle assigned P100; GPU guard rejected before model/rows |
+| Bounded re-authoring A gate | `db55d7d` | 15 | 9/15 = 0.600, CI [0.357, 0.802] | not run | A gate failed after the one allowed re-authoring pass; xlong closed |
 
 Every imported zip was audited for caches, weights, and token-like secrets. The hidden-signal smoke and latent tool-roundtrip passed in the smoke sessions. The generation-path hash for the xlong attempts was `6ce3d3c4492384d2`.
 
-The measured ceiling readout is therefore guarded: the current 9-stage sensor-quality xlong task is not A-qualified for Qwen3-8B 4-bit under the frozen one-repair protocol. Because the single-agent control failed, Phase 4C does **not** support a claim that clean-cache latent tracks text at 9 stages, nor that it collapses against text at 9 stages. The xxlong branch was not launched.
+The final bounded re-authoring pass used mechanical scorer-spec alignment rules copied from the A-qualified 7-stage tasks, kept exactly 9 dependent stages, left scorers unchanged, and passed reference-script checks. It still failed the pre-registered A gate: `A_single` reached 9/15 final pass and 7/15 first-attempt pass. By family, campaign passed 5/5, orders passed 2/5, and sensor passed 2/5. Therefore the hard stop fired: no B/C xlong matrix, no xxlong branch, and no further xlong prompt-tuning loop.
+
+The measured ceiling readout is therefore guarded: 9-stage xlong is not measurable for Qwen3-8B 4-bit under this protocol because the single-agent control does not qualify after the single allowed re-authoring pass. Phase 4C does **not** support a claim that clean-cache latent tracks text at 9 stages, nor that it collapses against text at 9 stages. The binding constraint is benchmark construction/model capability at 9 stages, not the coordination channel.
 
 ### Appendix: Non-Citable Xlong Diagnostics
 
@@ -119,12 +123,13 @@ Long-horizon attribution failures were mostly valid Python with wrong task seman
 | `C2_dedup`, n=30 | 25 | 3 | 2 | Pooled confirmation |
 | `C5_anchor`, n=30 | 17 | not primary | not primary | Harm linked to polluted/wrong anchor text |
 | xlong A gate, Version #8 | 4 | mixed | high-partial semantic slips | Not interpretable as B-vs-C |
+| xlong reauth A gate, Version #14 | 9 | 1 | 5 | Still failed A gate; B/C not run |
 
 The repeated pattern is that exact output contracts matter sharply at small model scale. That is a benchmark-design constraint, not a latent-channel result.
 
 ## Plain-English Readout
 
-The prototype found a real systems failure and a real systems fix. The apparent 7-stage collapse of training-free latent agent communication was not intrinsic: it was caused by polluted KV-cache construction, and deduplicating the latent cache recovered performance from 3/15 to 11/15 while preserving zero decoded coordination tokens. However, the follow-up 9-stage ceiling test did not produce a valid latent-vs-text comparison because the single-agent control failed the sensor-quality xlong task. The honest current claim is: clean-cache latent communication is competitive with text through the measured 7-stage planning horizon, cache construction is a first-order design variable, and the next credible horizon test needs a stronger benchmark design and stronger GPU access.
+The prototype found a real systems failure and a real systems fix. The apparent 7-stage collapse of training-free latent agent communication was not intrinsic: it was caused by polluted KV-cache construction, and deduplicating the latent cache recovered performance from 3/15 to 11/15 while preserving zero decoded coordination tokens. However, the bounded 9-stage ceiling retry still did not produce a valid latent-vs-text comparison because the single-agent control reached only 9/15 after the one allowed re-authoring pass. The honest current claim is: clean-cache latent communication is competitive with text through the measured 7-stage planning horizon, cache construction is a first-order design variable, and the 9-stage question is closed for this project phase because benchmark construction/model capability, not the coordination channel, is the binding constraint.
 
 ## Future Work
 

@@ -82,9 +82,11 @@ five orders C5 runs failed. See
 tables, confidence intervals, and Fisher exact tests.
 
 The 9-stage xlong ceiling attempt failed the pre-registered A_single gate even
-after narrow task-contract clarifications, driven by the sensor-quality family.
-It is therefore treated as an A-qualification ceiling, not as a latent-vs-text
-result; the 11-stage xxlong branch was not launched.
+after one bounded scorer-spec re-authoring pass. The final A-only gate reached
+9/15 overall: campaign ROI passed 5/5, while orders KPI and sensor quality each
+passed 2/5. It is therefore treated as an A-qualification ceiling, not as a
+latent-vs-text result; no B/C xlong matrix was run after the retry, and the
+11-stage xxlong branch was not launched.
 
 ## Setup
 
@@ -148,9 +150,9 @@ execution at the end. A stronger follow-up is a per-stage
 tool-call boundaries.
 
 Phase 4C attempted to extend the clean-cache test to 9 stages, but the
-single-agent control did not qualify on the sensor-quality xlong task. The next
-meaningful benchmark step is not more prompt tuning on this task; it is the
-stronger per-stage execution horizon and, later, a trained RecursiveMAS-style
-latent module or adapter. Both are gated on stronger GPU access. A larger coder
-model, such as an approximately 30B model in 4-bit, would also test whether the
-ceiling is partly model-scale dependent.
+single-agent control did not qualify even after the single allowed re-authoring
+cycle. The next meaningful benchmark step is not more prompt tuning on this
+task; it is the stronger per-stage execution horizon and, later, a trained
+RecursiveMAS-style latent module or adapter. Both are gated on stronger GPU
+access. A larger coder model, such as an approximately 30B model in 4-bit, would
+also test whether the ceiling is partly model-scale dependent.
