@@ -757,12 +757,18 @@ def _campaign_xlong_score(work_dir: Path) -> ScoreResult:
         return ScoreResult(False, 0.0, message, {})
     df = _campaign_cleaned(work_dir)
     top_channel = df.groupby("channel")["revenue"].sum().idxmax()
+    top_channel_id = df.groupby("channel_id")["revenue"].sum().idxmax()
     expected_pred = float(np.poly1d(np.polyfit(df["spend"], df["revenue"], 1))(250))
     best_owner = (df["revenue"] - df["spend"]).groupby(df["owner"]).sum().idxmax()
+    observed_top_channel = data.get("top_channel_by_revenue")
     checks = {
         "rows_clean": data.get("rows_clean") == len(df),
         "total_profit": _close(data.get("total_profit"), (df["revenue"] - df["spend"]).sum()),
-        "top_channel_by_revenue": str(data.get("top_channel_by_revenue", "")).lower() == str(top_channel).lower(),
+        "top_channel_by_revenue": (
+            str(observed_top_channel).lower() == str(top_channel).lower()
+            or _same_id(_field_from_object(observed_top_channel, "channel_id"), top_channel_id)
+            or str(_field_from_object(observed_top_channel, "channel")).lower() == str(top_channel).lower()
+        ),
         "best_roi_campaign": _same_id(data.get("best_roi_campaign"), df.sort_values("roi", ascending=False).iloc[0]["campaign_id"]),
         "predicted_revenue_for_spend_250": _close(data.get("predicted_revenue_for_spend_250"), expected_pred, atol=1e-2),
         "best_owner_by_profit": str(data.get("best_owner_by_profit", "")).lower() == str(best_owner).lower(),
@@ -777,14 +783,20 @@ def _campaign_xxlong_score(work_dir: Path) -> ScoreResult:
         return ScoreResult(False, 0.0, message, {})
     df = _campaign_cleaned(work_dir)
     top_channel = df.groupby("channel")["revenue"].sum().idxmax()
+    top_channel_id = df.groupby("channel_id")["revenue"].sum().idxmax()
     model = np.poly1d(np.polyfit(df["spend"], df["revenue"], 1))
     expected_pred = float(model(250))
     best_owner = (df["revenue"] - df["spend"]).groupby(df["owner"]).sum().idxmax()
     top_channel_roi = df.groupby("channel")["roi"].mean().idxmax()
+    observed_top_channel = data.get("top_channel_by_revenue")
     checks = {
         "rows_clean": data.get("rows_clean") == len(df),
         "total_profit": _close(data.get("total_profit"), (df["revenue"] - df["spend"]).sum()),
-        "top_channel_by_revenue": str(data.get("top_channel_by_revenue", "")).lower() == str(top_channel).lower(),
+        "top_channel_by_revenue": (
+            str(observed_top_channel).lower() == str(top_channel).lower()
+            or _same_id(_field_from_object(observed_top_channel, "channel_id"), top_channel_id)
+            or str(_field_from_object(observed_top_channel, "channel")).lower() == str(top_channel).lower()
+        ),
         "best_roi_campaign": _same_id(data.get("best_roi_campaign"), df.sort_values("roi", ascending=False).iloc[0]["campaign_id"]),
         "predicted_revenue_for_spend_250": _close(data.get("predicted_revenue_for_spend_250"), expected_pred, atol=1e-2),
         "best_owner_by_profit": str(data.get("best_owner_by_profit", "")).lower() == str(best_owner).lower(),
@@ -977,7 +989,7 @@ ORDERS_STAGES = {
         "Coerce numeric order fields, keep complete orders, and drop rows with missing units.",
         "Compute gross_revenue, net_revenue, and margin using unit_price or the identical price alias.",
         "Join customer regions and tiers.",
-        "Aggregate customer net revenue and count customers with net revenue at least 30.",
+        "Aggregate net_revenue by distinct customer_id and count high_value_customers as customers with total net_revenue >= 30, including customers exactly equal to 30.",
         "Fit LinearRegression predicting net_revenue from units, unit_price, discount_rate and compute training MAE.",
         "Write one-row orders_long_report.csv with columns rows_clean, total_net_revenue, total_margin, top_region, high_value_customers, model_mae.",
     ),
@@ -986,7 +998,7 @@ ORDERS_STAGES = {
         "Coerce numeric order fields, keep complete orders, and drop rows with missing units.",
         "Compute gross_revenue, net_revenue, and margin using unit_price or the identical price alias.",
         "Join customer regions and tiers.",
-        "Aggregate customer net revenue and count customers with net revenue at least 30.",
+        "Aggregate net_revenue by distinct customer_id and count high_value_customers as customers with total net_revenue >= 30, including customers exactly equal to 30.",
         "Fit LinearRegression predicting net_revenue from units, unit_price, discount_rate and compute training MAE.",
         "Aggregate total margin by tier and identify best_tier_by_margin.",
         "Compute margin_per_unit = total_margin / total units over cleaned rows.",
@@ -997,7 +1009,7 @@ ORDERS_STAGES = {
         "Coerce numeric order fields, keep complete orders, and drop rows with missing units.",
         "Compute gross_revenue, net_revenue, and margin using unit_price or the identical price alias.",
         "Join customer regions and tiers.",
-        "Aggregate customer net revenue and count customers with net revenue at least 30.",
+        "Aggregate net_revenue by distinct customer_id and count high_value_customers as customers with total net_revenue >= 30, including customers exactly equal to 30.",
         "Fit LinearRegression predicting net_revenue from units, unit_price, discount_rate and compute training MAE.",
         "Aggregate total margin by tier and identify best_tier_by_margin.",
         "Compute margin_per_unit = total_margin / total units over cleaned rows.",
@@ -1039,7 +1051,7 @@ SENSOR_STAGES = {
         "Compute alert = (adjusted_temp > 76) | (adjusted_pressure > 105).",
         "Aggregate site-hour alerts as an intermediate check.",
         "Aggregate by site and write sensor_xlong_site_summary.csv with site, temp_std, alert_rate, reading_count sorted by site.",
-        "Write one JSON object sensor_xlong_report.json with rows_clean, total_alerts, worst_site, peak_hour, best_site_by_temp_stability, mean_alert_rate.",
+        "Write one JSON object sensor_xlong_report.json with rows_clean, total_alerts, worst_site, peak_hour, best_site_by_temp_stability, mean_alert_rate = total_alerts / rows_clean over all cleaned rows, not the unweighted mean of site alert rates.",
     ),
     "xxlong": (
         "Read readings.csv and sensor_meta.csv.",
@@ -1052,7 +1064,7 @@ SENSOR_STAGES = {
         "Aggregate by site and write sensor_xxlong_site_summary.csv with site, temp_std, alert_rate, reading_count sorted by site.",
         "Identify best_site_by_temp_stability as the site with the smallest adjusted_temp standard deviation.",
         "Identify worst_sensor_by_alerts and peak_site_hour formatted as site-hour, for example beta-10.",
-        "Write one JSON object sensor_xxlong_report.json with rows_clean, total_alerts, worst_site, peak_hour, best_site_by_temp_stability, mean_alert_rate, worst_sensor_by_alerts, peak_site_hour.",
+        "Write one JSON object sensor_xxlong_report.json with rows_clean, total_alerts, worst_site, peak_hour, best_site_by_temp_stability, mean_alert_rate = total_alerts / rows_clean over all cleaned rows, worst_sensor_by_alerts, peak_site_hour.",
     ),
 }
 
@@ -1088,7 +1100,7 @@ CAMPAIGN_STAGES = {
         "Identify best_roi_campaign as the campaign_id with the highest ROI.",
         "Fit a simple numpy polynomial line predicting revenue from spend and predict revenue for spend 250.",
         "Aggregate profit by owner and identify best_owner_by_profit.",
-        "Write one JSON object campaign_xlong_report.json with rows_clean, total_profit, top_channel_by_revenue, best_roi_campaign, predicted_revenue_for_spend_250, best_owner_by_profit, overall_ctr.",
+        "Write one JSON object campaign_xlong_report.json with rows_clean, total_profit, top_channel_by_revenue, best_roi_campaign, predicted_revenue_for_spend_250, best_owner_by_profit, overall_ctr = total clicks / total impressions over all cleaned rows, not mean row CTR.",
     ),
     "xxlong": (
         "Read campaigns.csv and channels.csv.",
@@ -1099,7 +1111,7 @@ CAMPAIGN_STAGES = {
         "Identify best_roi_campaign as the campaign_id with the highest ROI.",
         "Fit a simple numpy polynomial line predicting revenue from spend and predict revenue for spend 250.",
         "Aggregate profit by owner and identify best_owner_by_profit.",
-        "Compute overall_ctr = total clicks / total impressions.",
+        "Compute overall_ctr = total clicks / total impressions over all cleaned rows, not mean row CTR.",
         "Aggregate mean ROI by channel and identify top_channel_by_mean_roi.",
         "Write one JSON object campaign_xxlong_report.json with rows_clean, total_profit, top_channel_by_revenue, best_roi_campaign, predicted_revenue_for_spend_250, best_owner_by_profit, overall_ctr, top_channel_by_mean_roi, predicted_profit_for_spend_250.",
     ),

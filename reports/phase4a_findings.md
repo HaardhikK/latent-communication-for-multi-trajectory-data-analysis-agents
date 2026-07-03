@@ -6,7 +6,7 @@ Session 2 reran the long-horizon attribution matrix on Qwen3-8B 4-bit with the f
 
 - **Confirmed:** the original 7-stage latent collapse was caused by duplicate chat-templated task/prompt re-encoding into the latent KV cache. `C1_phase3_exact` was 3/15 = 0.200 while `C2_dedup` was 11/15 = 0.733; Fisher p=0.0092. Median decode cache length fell from 2828 to 532. `C2_dedup` is statistically indistinguishable from `B_textmas` (12/15 = 0.800, Fisher p=1.0000) while using 0 decoded coordination tokens.
 - **Not confirmed at n=30:** latent steps remained directionally positive but did not reach significance. After Session 3 pooling, `C2_dedup` was 25/30 = 0.833 and `C3_no_latent` was 19/30 = 0.633 (delta +0.200, Fisher p=0.1432; first-attempt p=0.4118). Report this as no confirmed latent-step contribution at this sample size.
-- **No evidence decoded anchors help:** after Session 3 pooling, `C5_anchor` was 17/30 = 0.567 versus `C2_dedup` at 25/30 = 0.833 (delta -0.267, Fisher p=0.0470; first-attempt p=0.2789). C5 median cache length was 1258, about 2.4x C2, consistent with anchors re-polluting the cache.
+- **Greedy anchors harmed this implementation:** after Session 3 pooling, `C5_anchor` was 17/30 = 0.567 versus `C2_dedup` at 25/30 = 0.833 (delta -0.267, Fisher p=0.0470; first-attempt p=0.2789). This does not test well-formed grounding. The greedy <=24-token anchors parroted duplicated/truncated stage text into the cache and acted as a medium pollution dose: C5 median cache length was 1258, about 2.4x C2.
 
 ## Session 3 Confirmation
 
@@ -19,6 +19,42 @@ Session 3 added repeats 6-10 for `C2_dedup`, `C3_no_latent`, and `C5_anchor`, us
 | C5_anchor | 30 | 0.567 | [0.392, 0.726] | 0.567 | 1258 | 12 runtime, 1 semantic |
 
 Pre-registered decision: `C2_dedup` versus `C3_no_latent` at n=30 gives Fisher p=0.1432, so the latent-step contribution is not confirmed. The stronger follow-up is the per-stage execute-observe-continue benchmark, where latent vectors have more work to do than in this one-execution planning horizon.
+
+## Cache Dose-Response
+
+Among latent-step variants, final pass rate falls as duplicated decoded/chat-templated cache text increases. This is a dose-response signal for cache pollution, not for latent steps in isolation: `C3_no_latent` sits off the curve with a short cache but weaker accuracy, so cache composition and whether latent steps are present both matter.
+
+| Variant | Latent steps? | Median cache_len_at_decode | Final pass | Interpretation |
+|---|---:|---:|---:|---|
+| C2_dedup | yes | 532 | 0.833 | Clean latent-step cache, best observed C path |
+| C5_anchor | yes | 1258 | 0.567 | Medium decoded-anchor pollution dose, significantly worse than C2 |
+| C1_phase3_exact | yes | 2828 | 0.200 | Heavy duplicate full-task/chat-template pollution |
+| C3_no_latent | no | 504 | 0.633 | Short cache but no latent-step updates; off the pollution curve |
+
+<svg xmlns="http://www.w3.org/2000/svg" width="620" height="310" viewBox="0 0 620 310" role="img" aria-label="Final pass rate versus median cache length for Phase 4A latent variants">
+  <rect x="0" y="0" width="620" height="310" fill="white"/>
+  <line x1="70" y1="250" x2="570" y2="250" stroke="#444" stroke-width="1.5"/>
+  <line x1="70" y1="40" x2="70" y2="250" stroke="#444" stroke-width="1.5"/>
+  <text x="300" y="295" text-anchor="middle" font-family="Arial, sans-serif" font-size="13">Median cache_len_at_decode</text>
+  <text x="18" y="150" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" transform="rotate(-90 18 150)">Final pass rate</text>
+  <text x="70" y="270" text-anchor="middle" font-family="Arial, sans-serif" font-size="11">500</text>
+  <text x="254" y="270" text-anchor="middle" font-family="Arial, sans-serif" font-size="11">1250</text>
+  <text x="438" y="270" text-anchor="middle" font-family="Arial, sans-serif" font-size="11">2000</text>
+  <text x="561" y="270" text-anchor="middle" font-family="Arial, sans-serif" font-size="11">3000</text>
+  <text x="50" y="250" text-anchor="end" font-family="Arial, sans-serif" font-size="11">0.0</text>
+  <text x="50" y="145" text-anchor="end" font-family="Arial, sans-serif" font-size="11">0.5</text>
+  <text x="50" y="40" text-anchor="end" font-family="Arial, sans-serif" font-size="11">1.0</text>
+  <polyline points="78,75 256,131 563,208" fill="none" stroke="#1f77b4" stroke-width="2.5"/>
+  <circle cx="78" cy="75" r="6" fill="#1f77b4"/>
+  <text x="90" y="70" font-family="Arial, sans-serif" font-size="12">C2 0.833</text>
+  <circle cx="256" cy="131" r="6" fill="#1f77b4"/>
+  <text x="268" y="126" font-family="Arial, sans-serif" font-size="12">C5 0.567</text>
+  <circle cx="563" cy="208" r="6" fill="#1f77b4"/>
+  <text x="470" y="203" font-family="Arial, sans-serif" font-size="12">C1 0.200</text>
+  <circle cx="70" cy="117" r="6" fill="#d62728"/>
+  <text x="84" y="118" font-family="Arial, sans-serif" font-size="12">C3 off-curve 0.633</text>
+  <text x="70" y="24" font-family="Arial, sans-serif" font-size="14" font-weight="bold">Cache pollution dose-response among latent-step variants</text>
+</svg>
 
 ## By Variant
 
@@ -76,7 +112,7 @@ Pre-registered decision: `C2_dedup` versus `C3_no_latent` at n=30 gives Fisher p
 
 ## C5 Anchor Forensics
 
-Anchors were greedy, <=24-token decoded stage summaries appended as raw continuation text. The table dumps the per-run anchor-quality classification and pass/fail outcome.
+Anchors were greedy, <=24-token decoded stage summaries appended as raw continuation text. This implementation parroted duplicated/truncated stage text into the cache and should be read as a medium pollution-dose test, not as a test of well-formed grounding. The table dumps the per-run anchor-quality classification and pass/fail outcome. Because anchor decoding was greedy and deterministic, anchor content was identical across repeats within each family; repeats are therefore not independent with respect to anchor text content, even though code generation still used the normal repeat seeds.
 
 | Task | Repeat | Passed | Cache len | Anchor quality | Quality counts | Anchor dump |
 |---|---:|---:|---:|---|---|---|
@@ -103,4 +139,19 @@ Anchor quality vs outcome:
 | True | 8 | 1222 | {'wrong': 8} |
 | False | 7 | 1357 | {'wrong': 7} |
 
-Interpretation: C5 failures were not driven by empty or degenerate code. The anchor text often contained duplicated/truncated stage fragments, and the added decoded text roughly doubled-to-tripled the C2 cache length, matching the cache-pollution mechanism.
+Interpretation: C5 failures were not driven by empty or degenerate code. The anchor text often contained duplicated/truncated stage fragments, and the added decoded text roughly doubled-to-tripled the C2 cache length, matching the cache-pollution mechanism. The orders-family anchors are the clearest concrete failure: they injected the wrong formula `net_revenue = units * (unit_price - discount_amount)` instead of the task formula `units * unit_price * (1 - discount_rate)`, and all 5 orders C5 runs failed. The correct conclusion is narrow: this greedy-anchor implementation significantly harmed C5 versus C2 (Fisher p=0.0470), but it does not rule out a future, well-formed grounding channel.
+
+## Phase 4C Xlong Attempt 1
+
+Kaggle Version #8 ran the first 9-stage ceiling matrix on Qwen3-8B 4-bit, single visible Tesla T4, commit `a3e4457671d432cdef6e4b88a83d4b66d633cf75`, generation-path hash `6ce3d3c4492384d2`. The result zip imported cleanly: dependency/GPU guard passed, hidden-signal smoke passed, latent tool-roundtrip passed, `60/60` rows completed, and the zip audit found no HF cache, model weights, or token-like secrets.
+
+Pre-registered A-gate failed: `A_single` was 4/15 = 0.267, far below the required `>=13/15`. Therefore this run is **not interpretable** as a latent-vs-text ceiling comparison. The mode rows are recorded only as diagnostics:
+
+| Mode | Variant | Runs | Final pass | First-attempt pass | Median cache len |
+|---|---|---:|---:|---:|---:|
+| A_single | - | 15 | 0.267 | 0.267 | 0 |
+| B_textmas | - | 15 | 0.400 | 0.333 | 0 |
+| C_latentmas | C1_phase3_exact | 15 | 0.400 | 0.067 | 4259 |
+| C_latentmas | C2_dedup | 15 | 0.067 | 0.067 | 679 |
+
+Failure inspection showed mostly high-partial-credit semantic slips rather than empty/invalid code: sensor missed only the global `mean_alert_rate` formula, campaign often used mean row CTR instead of global CTR and sometimes returned channel_id instead of channel name, and one orders run missed the inclusive high-value customer count. The xlong task contract was therefore clarified/simplified while preserving 9 dependent stages. Version #8 B/C gaps should not be cited.

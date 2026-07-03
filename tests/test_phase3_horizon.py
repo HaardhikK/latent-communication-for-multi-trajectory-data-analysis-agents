@@ -121,7 +121,7 @@ def test_extra_horizon_tasks_have_stage_counts_and_output_contracts():
         "orders_kpi_xlong": (
             9,
             "orders_xlong_report.json",
-            ("best_tier_by_margin", "margin_per_unit"),
+            ("best_tier_by_margin", "margin_per_unit", "net_revenue >= 30"),
         ),
         "orders_kpi_xxlong": (
             11,
@@ -131,7 +131,7 @@ def test_extra_horizon_tasks_have_stage_counts_and_output_contracts():
         "sensor_quality_xlong": (
             9,
             "sensor_xlong_report.json",
-            ("sensor_xlong_site_summary.csv", "best_site_by_temp_stability", "mean_alert_rate"),
+            ("sensor_xlong_site_summary.csv", "best_site_by_temp_stability", "mean_alert_rate = total_alerts / rows_clean"),
         ),
         "sensor_quality_xxlong": (
             11,
@@ -141,7 +141,7 @@ def test_extra_horizon_tasks_have_stage_counts_and_output_contracts():
         "campaign_roi_xlong": (
             9,
             "campaign_xlong_report.json",
-            ("best_owner_by_profit", "overall_ctr"),
+            ("best_owner_by_profit", "overall_ctr = total clicks / total impressions"),
         ),
         "campaign_roi_xxlong": (
             11,

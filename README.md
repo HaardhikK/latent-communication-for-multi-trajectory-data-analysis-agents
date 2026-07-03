@@ -73,10 +73,17 @@ coordination tokens.
 
 The current evidence is therefore: cache construction matters strongly; latent
 steps remain directionally helpful but were not statistically confirmed after
-pooling to n=30; decoded anchors did not help and appear to re-pollute the
-cache. See
+pooling to n=30. The tested greedy <=24-token anchor implementation is not a
+general grounding result: it parroted duplicated/truncated stage text back into
+the cache, acted as a medium pollution dose, and significantly harmed C5 versus
+C2. In the orders task it even asserted the wrong net-revenue formula, and all
+five orders C5 runs failed. See
 [`reports/phase4a_findings.md`](reports/phase4a_findings.md) for the Phase 4A
 tables, confidence intervals, and Fisher exact tests.
+
+An initial 9-stage xlong attempt failed the pre-registered A_single gate, so it
+is treated as a task-contract diagnostic rather than a latent-vs-text result.
+The ambiguous xlong formulas were clarified while keeping the 9-stage structure.
 
 ## Setup
 
