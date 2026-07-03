@@ -81,9 +81,10 @@ five orders C5 runs failed. See
 [`reports/phase4a_findings.md`](reports/phase4a_findings.md) for the Phase 4A
 tables, confidence intervals, and Fisher exact tests.
 
-An initial 9-stage xlong attempt failed the pre-registered A_single gate, so it
-is treated as a task-contract diagnostic rather than a latent-vs-text result.
-The ambiguous xlong formulas were clarified while keeping the 9-stage structure.
+The 9-stage xlong ceiling attempt failed the pre-registered A_single gate even
+after narrow task-contract clarifications, driven by the sensor-quality family.
+It is therefore treated as an A-qualification ceiling, not as a latent-vs-text
+result; the 11-stage xxlong branch was not launched.
 
 ## Setup
 
@@ -146,9 +147,10 @@ execution at the end. A stronger follow-up is a per-stage
 `execute -> observe -> continue` horizon where latent memory must survive many
 tool-call boundaries.
 
-The immediate next step is to find the real horizon ceiling after fixing cache
-construction: test 9- and 11-stage variants with `C2_dedup` against the text
-baseline. If deduplicated latent coordination then collapses while text holds,
-that becomes the evidence-backed target for a small RecursiveMAS-style latent
-module or adapter. A larger coder model, such as an approximately 30B model in
-4-bit, would also test whether the ceiling is partly model-scale dependent.
+Phase 4C attempted to extend the clean-cache test to 9 stages, but the
+single-agent control did not qualify on the sensor-quality xlong task. The next
+meaningful benchmark step is not more prompt tuning on this task; it is the
+stronger per-stage execution horizon and, later, a trained RecursiveMAS-style
+latent module or adapter. Both are gated on stronger GPU access. A larger coder
+model, such as an approximately 30B model in 4-bit, would also test whether the
+ceiling is partly model-scale dependent.

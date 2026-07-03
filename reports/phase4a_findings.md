@@ -155,3 +155,16 @@ Pre-registered A-gate failed: `A_single` was 4/15 = 0.267, far below the require
 | C_latentmas | C2_dedup | 15 | 0.067 | 0.067 | 679 |
 
 Failure inspection showed mostly high-partial-credit semantic slips rather than empty/invalid code: sensor missed only the global `mean_alert_rate` formula, campaign often used mean row CTR instead of global CTR and sometimes returned channel_id instead of channel name, and one orders run missed the inclusive high-value customer count. The xlong task contract was therefore clarified/simplified while preserving 9 dependent stages. Version #8 B/C gaps should not be cited.
+
+## Phase 4C Xlong Gate Outcome
+
+After Version #8 failed the pre-registered A gate, three narrow contract clarifications were tested on Qwen3-8B 4-bit, single visible T4, with hidden-signal smoke and latent tool-roundtrip passing on each session. These were deliberately tiny A/B smoke checks, not full B-vs-C comparisons:
+
+| Kaggle version | Commit | Scope | A result | B result | Interpretation |
+|---|---|---|---:|---:|---|
+| #9 | `0d266b5` | xlong A/B, all families, seed 17 | 2/3 | 2/3 | Orders and campaign passed; sensor still failed. |
+| #10 | `9a169a9` | xlong A/B, all families, seed 17 | 2/3 | 3/3 | Sensor still failed for A at 8/9 checks. |
+| #11 | `9fb180b` | sensor xlong A/B, seed 17 | 0/1 | 0/1 | Code-like `sum(alert)` wording induced bad pandas code. |
+| #12 | `40d6c46` | sensor xlong A/B, seed 17 | 0/1 | 1/1 | Plain-language site summary helped B, but A still wrote the site-hour table to the site-summary output. |
+
+The pre-registered A_single gate for xlong was therefore never cleared. Phase 4C stops here: there is no valid xlong or xxlong latent-vs-text comparison, and no claim that clean-cache latent does or does not track text at 9 or 11 stages. The measured ceiling result is narrower but important: the current 9-stage sensor-quality planning task is not A-qualified for Qwen3-8B under the frozen one-repair protocol, so it cannot serve as a fair channel-comparison benchmark. Future work should move to a stronger per-stage execute-observe-continue benchmark and trained latent modules rather than continuing outcome-driven prompt tuning on this xlong task.

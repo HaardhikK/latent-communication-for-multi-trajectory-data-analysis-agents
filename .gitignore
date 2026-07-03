@@ -28,6 +28,7 @@ reports/
 !reports/
 reports/*
 !reports/phase4a_findings.md
+!reports/phase4_writeup.md
 *.zip
 *.csv
 *.jsonl
@@ -52,3 +53,4 @@ kaggle.json
 *.md
 !README.md
 !reports/phase4a_findings.md
+!reports/phase4_writeup.md
