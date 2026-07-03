@@ -27,6 +27,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--quantization", choices=["none", "4bit"], default="4bit")
     parser.add_argument("--variants", default="C1_phase3_exact,C2_dedup,C3_no_latent,C5_anchor")
     parser.add_argument("--include-baselines", action="store_true")
+    parser.add_argument("--baseline-modes", default="A,B")
     parser.add_argument("--experiment-part", default="session2")
     parser.add_argument("--families", default="orders_kpi,sensor_quality,campaign_roi")
     parser.add_argument("--horizons", default="long")
@@ -123,6 +124,7 @@ def main() -> int:
     ]
     if args.include_baselines:
         command.append("--include-baselines")
+        command.extend(["--baseline-modes", args.baseline_modes])
     if not args.strict_reuse:
         command.append("--no-strict-reuse")
     if resume_csv:

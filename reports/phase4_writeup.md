@@ -20,6 +20,17 @@ The old long-horizon latent path was rerun exactly as `C1_phase3_exact`, with di
 
 At 7 stages, clean-cache latent (`C2_dedup`) was statistically indistinguishable from the text baseline while using zero decoded coordination tokens.
 
+### Repair Fixes Crashes, Not Contract Misses
+
+The Version #8 xlong artifacts also exposed a repair-rescue asymmetry. First-attempt failures in `C1_phase3_exact` were mostly runtime crashes; first-attempt failures in `C2_dedup` were mostly valid Python that missed strict scorer contracts.
+
+| Variant | First attempt passed | Runtime first-attempt failures | Semantic/scorer first-attempt failures | Repaired to final pass |
+|---|---:|---:|---:|---:|
+| `C1_phase3_exact` xlong | 1/15 | 8/15 | 6/15 | 5 runtime failures rescued |
+| `C2_dedup` xlong | 1/15 | 4/15 | 10/15 | 0 failures rescued |
+
+The frozen `text_reset` repair path is good at fixing concrete tracebacks, such as missing imports or serialization crashes. It did not fix valid-but-wrong code that had already chosen the wrong output contract or formula. That matters for interpreting xlong: repair cannot compensate for ambiguous task/spec alignment.
+
 ## Claim 2: Latent-Step Contribution Was Directional, Not Confirmed
 
 Session 3 pooled `C2_dedup`, `C3_no_latent`, and `C5_anchor` to n=30 each under identical generation-path hashes.
@@ -82,6 +93,20 @@ Phase 4C attempted to extend the clean-cache question from 7 stages to 9 stages 
 Every imported zip was audited for caches, weights, and token-like secrets. The hidden-signal smoke and latent tool-roundtrip passed in the smoke sessions. The generation-path hash for the xlong attempts was `6ce3d3c4492384d2`.
 
 The measured ceiling readout is therefore guarded: the current 9-stage sensor-quality xlong task is not A-qualified for Qwen3-8B 4-bit under the frozen one-repair protocol. Because the single-agent control failed, Phase 4C does **not** support a claim that clean-cache latent tracks text at 9 stages, nor that it collapses against text at 9 stages. The xxlong branch was not launched.
+
+### Appendix: Non-Citable Xlong Diagnostics
+
+Versions #8-#12 are useful for task-forensics, but they are **non-citable as channel comparisons**. Version #8 failed the A-gate, and Versions #9-#12 were tiny diagnostic smokes after contract edits, not pre-registered full matrices.
+
+| Version | Scope | Result | Why it is non-citable |
+|---|---|---|---|
+| #8 | 60-row xlong matrix | A_single 4/15, B_textmas 6/15, C1 6/15, C2 1/15 | A-gate failed before channel interpretation. |
+| #9 | A/B xlong smoke, seed 17 | A 2/3, B 2/3 | Diagnostic after contract clarification. |
+| #10 | A/B xlong smoke, seed 17 | A 2/3, B 3/3 | Diagnostic; B>A on same model indicated remaining task ambiguity. |
+| #11 | Sensor-only smoke, seed 17 | A 0/1, B 0/1 | Code-like formula wording induced invalid pandas code. |
+| #12 | Sensor-only smoke, seed 17 | A 0/1, B 1/1 | B>A on same model again indicated task ambiguity, not channel quality. |
+
+The methodological lesson is that long-horizon benchmark tasks need scorer-spec alignment discipline before any latent-vs-text claim. A baseline ordering where B beats A on the same model is a warning sign: the task contract is probably being interpreted differently across prompts, so the benchmark is measuring ambiguity rather than coordination channel quality.
 
 ## Failure Classes
 

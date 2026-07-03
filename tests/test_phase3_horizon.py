@@ -121,7 +121,7 @@ def test_extra_horizon_tasks_have_stage_counts_and_output_contracts():
         "orders_kpi_xlong": (
             9,
             "orders_xlong_report.json",
-            ("best_tier_by_margin", "margin_per_unit", "net_revenue >= 30"),
+            ("best_tier_by_margin", "margin_per_unit", "total net_revenue is >= 30"),
         ),
         "orders_kpi_xxlong": (
             11,
@@ -157,6 +157,63 @@ def test_extra_horizon_tasks_have_stage_counts_and_output_contracts():
         assert output in task.prompt
         for snippet in snippets:
             assert snippet in task.prompt
+
+
+def test_xlong_prompts_are_scorer_spec_aligned_and_budget_fit():
+    class ApproxTokenizer:
+        def encode(self, text: str, add_special_tokens: bool = False):
+            return text.replace("\n", " ").replace(",", " ").split()
+
+    requirements = {
+        "orders_kpi_xlong": (
+            "rows_clean = cleaned joined row count",
+            "total_net_revenue = sum of net_revenue",
+            "total_margin = sum of margin",
+            "top_region = region with the largest summed net_revenue",
+            "high_value_customers = count of customers whose total net_revenue is >= 30",
+            "including customers exactly equal to 30",
+            "model_mae = mean absolute training error",
+            "best_tier_by_margin = tier with the largest summed margin",
+            "margin_per_unit = total_margin / total units",
+            "exactly one JSON object orders_xlong_report.json",
+        ),
+        "sensor_quality_xlong": (
+            "rows_clean = cleaned joined row count",
+            "total_alerts = count of cleaned rows where alert is true",
+            "worst_site = site with the largest total_alerts by site",
+            "peak_hour = hour with the largest total_alerts by hour",
+            "do not write this site-hour table to sensor_xlong_site_summary.csv",
+            "sensor_xlong_site_summary.csv only from this site-level summary",
+            "alert_rate = alert_count / reading_count",
+            "best_site_by_temp_stability = site with the smallest temp_std",
+            "mean_alert_rate = total_alerts / rows_clean",
+            "exactly one JSON object sensor_xlong_report.json",
+        ),
+        "campaign_roi_xlong": (
+            "rows_clean = cleaned joined row count",
+            "total_profit = sum of profit",
+            "top_channel_by_revenue = channel name with the largest summed revenue",
+            "report channel names, not channel_id",
+            "best_roi_campaign = campaign_id for the row with the highest roi",
+            "predicted_revenue_for_spend_250 = predicted revenue when spend is 250",
+            "best_owner_by_profit = owner with the largest summed profit",
+            "overall_ctr = total clicks / total impressions",
+            "not the mean of per-row ctr values",
+            "exactly one JSON object campaign_xlong_report.json",
+        ),
+    }
+    tokenizer = ApproxTokenizer()
+    for task_id, snippets in requirements.items():
+        task = TASKS[task_id]
+        assert task.horizon_level == "xlong"
+        assert task.horizon_stages == 9
+        assert len(task.stage_specs) == 9
+        assert "sum(alert)" not in task.prompt
+        assert "pd." not in task.prompt
+        for snippet in snippets:
+            assert snippet in task.prompt
+        budget_row = run_phase3.build_budget_table([task], tokenizer)[task_id]
+        assert budget_row["reference_budget_ratio"] <= 0.70
 
 
 def test_orders_short_fixture_uses_numeric_customer_ids(tmp_path):
