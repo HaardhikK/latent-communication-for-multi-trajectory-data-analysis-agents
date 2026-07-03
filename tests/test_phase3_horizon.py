@@ -131,7 +131,7 @@ def test_extra_horizon_tasks_have_stage_counts_and_output_contracts():
         "sensor_quality_xlong": (
             9,
             "sensor_xlong_report.json",
-            ("sensor_xlong_site_summary.csv", "best_site_by_temp_stability", "mean_alert_rate = total_alerts / rows_clean"),
+            ("sensor_xlong_site_summary.csv", "best_site_by_temp_stability", "mean_alert_rate = total_alerts / rows_clean", "alert_rate = site alerts / reading_count"),
         ),
         "sensor_quality_xxlong": (
             11,

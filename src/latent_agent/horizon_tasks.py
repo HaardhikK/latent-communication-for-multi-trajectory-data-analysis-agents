@@ -1050,7 +1050,7 @@ SENSOR_STAGES = {
         "Compute adjusted_temp = raw_temp + temp_offset and adjusted_pressure = raw_pressure * pressure_scale.",
         "Compute alert = (adjusted_temp > 76) | (adjusted_pressure > 105).",
         "Aggregate site-hour alerts as an intermediate check.",
-        "Aggregate by site and write sensor_xlong_site_summary.csv with site, temp_std, alert_rate, reading_count sorted by site.",
+        "Aggregate by site and write sensor_xlong_site_summary.csv with site, temp_std, alert_rate = site alerts / reading_count for that site, reading_count sorted by site.",
         "Write one JSON object sensor_xlong_report.json with rows_clean, total_alerts, worst_site, peak_hour, best_site_by_temp_stability, mean_alert_rate = total_alerts / rows_clean over all cleaned rows, not the unweighted mean of site alert rates.",
     ),
     "xxlong": (
@@ -1061,7 +1061,7 @@ SENSOR_STAGES = {
         "Compute adjusted_temp = raw_temp + temp_offset and adjusted_pressure = raw_pressure * pressure_scale.",
         "Compute alert = (adjusted_temp > 76) | (adjusted_pressure > 105).",
         "Aggregate site-hour alerts as an intermediate check.",
-        "Aggregate by site and write sensor_xxlong_site_summary.csv with site, temp_std, alert_rate, reading_count sorted by site.",
+        "Aggregate by site and write sensor_xxlong_site_summary.csv with site, temp_std, alert_rate = site alerts / reading_count for that site, reading_count sorted by site.",
         "Identify best_site_by_temp_stability as the site with the smallest adjusted_temp standard deviation.",
         "Identify worst_sensor_by_alerts and peak_site_hour formatted as site-hour, for example beta-10.",
         "Write one JSON object sensor_xxlong_report.json with rows_clean, total_alerts, worst_site, peak_hour, best_site_by_temp_stability, mean_alert_rate = total_alerts / rows_clean over all cleaned rows, worst_sensor_by_alerts, peak_site_hour.",
