@@ -1,5 +1,5 @@
 # Latent Communication for Multi-Trajectory Data Analysis Agents
-
+this readme isnt upto-date. Updates are atttached in my blog.
 Read the blog here: https://haardhik.netlify.app/#blog/latent-coordination
 
 This repository tests a narrow systems question: when several code-executing
