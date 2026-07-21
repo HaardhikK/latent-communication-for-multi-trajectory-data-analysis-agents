@@ -1,5 +1,7 @@
 # Latent Communication for Multi-Trajectory Data Analysis Agents
 
+Read the blog here: https://haardhik.netlify.app/#blog/latent-coordination
+
 This repository tests a narrow systems question: when several code-executing
 data-analysis agents collaborate, do they need to exchange natural-language
 messages, or can they coordinate through shared hidden-state / KV-cache memory
